@@ -1,0 +1,14 @@
+{
+ "version": "2.3.0-202610122324",
+ "files": [
+  "graphapp/__init__.py",
+  "graphapp/model.py",
+  "graphapp/fitting.py",
+  "graphapp/numerics.py",
+  "graphapp/safe_expr.py",
+  "graphapp/texfmt.py",
+  "graphapp/plot_core.py",
+  "graphapp/io_utils.py",
+  "webapi.py"
+ ]
+}

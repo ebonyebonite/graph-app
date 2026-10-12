@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f77b4">
+<meta name="description" content="データのプロットと近似 (線形・非線形・Savitzky-Golay) を行うグラフ作成アプリ。論文・レポート向けの体裁で書き出せます。">
+<title>グラフ生成アプリ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css?v=2.3.0-202610122324">
+</head>
+<body data-tab="graph" data-rtab="settings">
+
+<!-- 起動中の表示 -->
+<div id="splash" role="status" aria-live="polite">
+  <img src="icons/icon-192.png" alt="" width="72" height="72">
+  <div class="splash-title">グラフ生成アプリ</div>
+  <div class="spinner" aria-hidden="true"></div>
+  <div id="splash-text">起動しています…</div>
+  <div class="splash-note">初回は 30 MB ほど読み込むため時間がかかります。2 回目からは速くなります。</div>
+</div>
+
+<header class="topbar">
+  <h1>グラフ生成</h1>
+  <div class="topbar-actions">
+    <button id="btn-undo" class="icon-btn" title="元に戻す" aria-label="元に戻す" disabled>
+      <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+    </button>
+    <button id="btn-redo" class="icon-btn" title="やり直し" aria-label="やり直し" disabled>
+      <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+    </button>
+    <button id="btn-menu" class="icon-btn" title="メニュー" aria-label="メニュー">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ===== データ ===== -->
+  <section id="pane-data" class="pane" aria-label="データ">
+    <div class="pane-head">
+      <h2>データセット</h2>
+      <div class="btn-row">
+        <button id="btn-add" class="btn primary">＋ 新規</button>
+        <button id="btn-import" class="btn">取り込み</button>
+        <button id="btn-formula" class="btn">数式</button>
+      </div>
+    </div>
+    <ul id="ds-list" class="ds-list"></ul>
+    <p id="ds-empty" class="hint">「＋ 新規」で表に入力するか、「取り込み」で CSV / Excel を読み込んでください。</p>
+
+    <div id="editor" class="editor" hidden>
+      <div class="editor-head">
+        <input id="ed-name" class="name-input" aria-label="データセットの名前">
+        <div class="btn-row small">
+          <button id="btn-up" class="icon-btn sm" title="上へ" aria-label="上へ移動"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
+          <button id="btn-down" class="icon-btn sm" title="下へ" aria-label="下へ移動"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+          <button id="btn-dup" class="icon-btn sm" title="複製" aria-label="複製"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+          <button id="btn-del" class="icon-btn sm danger" title="削除" aria-label="削除"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+        </div>
+      </div>
+      <div class="seg" role="tablist">
+        <button role="tab" data-etab="table" class="active">データ表</button>
+        <button role="tab" data-etab="props">表示・近似</button>
+      </div>
+
+      <!-- データ表 -->
+      <div id="etab-table" class="etab">
+        <div class="btn-row small wrap">
+          <button id="btn-paste" class="btn sm">貼り付け</button>
+          <button id="btn-addrow" class="btn sm">行を追加</button>
+          <button id="btn-textedit" class="btn sm">テキストで編集</button>
+          <button id="btn-clear" class="btn sm">全消去</button>
+        </div>
+        <div class="table-wrap">
+          <table id="data-table" class="data-table">
+            <thead><tr><th class="rn">#</th><th>X</th><th>Y</th><th title="空欄なら誤差棒なし">Y誤差</th><th title="空欄なら誤差棒なし">X誤差</th><th class="rn"></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <button id="btn-more" class="btn sm ghost" hidden>すべての行を表示</button>
+        <p id="data-info" class="hint"></p>
+      </div>
+
+      <!-- 表示・近似 -->
+      <div id="etab-props" class="etab" hidden>
+        <fieldset>
+          <legend>表示</legend>
+          <label class="row"><span>色</span><input type="color" id="p-color"></label>
+          <label class="row"><span>描き方</span><select id="p-style"></select></label>
+          <label class="row"><span>マーカー</span><select id="p-marker"></select></label>
+          <label class="row check"><input type="checkbox" id="p-filled"><span>マーカーを塗りつぶす</span></label>
+          <label class="row"><span>マーカーの大きさ (pt)</span><input type="number" id="p-msize" min="1" max="30" step="0.5" inputmode="decimal"></label>
+          <label class="row"><span>線の太さ (pt)</span><input type="number" id="p-lw" min="0.25" max="10" step="0.25" inputmode="decimal"></label>
+        </fieldset>
+        <fieldset>
+          <legend>近似</legend>
+          <label class="row"><span>近似</span><select id="p-fit"></select></label>
+          <div id="p-custom-box">
+            <label class="col"><span>数式 (x, a, b, …)</span><input id="p-eq" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例: a * exp(-b * x) + c"></label>
+            <p id="p-eq-status" class="status"></p>
+          </div>
+          <div id="p-sg-box">
+            <label class="row"><span>ウィンドウ長</span><input type="number" id="p-wl" min="3" step="2" inputmode="numeric"></label>
+            <label class="row"><span>多項式次数</span><input type="number" id="p-po" min="0" step="1" inputmode="numeric"></label>
+            <p id="p-sg-status" class="status"></p>
+          </div>
+          <label class="col"><span>近似線の凡例名 (空欄なら自動)</span><input id="p-fitlabel"></label>
+          <label class="row check"><input type="checkbox" id="p-r2"><span>R² を凡例に表示</span></label>
+          <label class="row check"><input type="checkbox" id="p-formula"><span>近似式を凡例に表示</span></label>
+          <label class="row check"><input type="checkbox" id="p-weighted"><span>Y 誤差で重み付けする</span></label>
+          <label class="row"><span>有効数字 (凡例)</span><input type="number" id="p-sig" min="1" max="10" step="1" inputmode="numeric"></label>
+        </fieldset>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== グラフ ===== -->
+  <section id="pane-graph" class="pane" aria-label="グラフ">
+    <div class="preview-wrap">
+      <div id="preview" class="preview">
+        <img id="preview-img" alt="グラフのプレビュー" hidden>
+        <div id="preview-empty" class="preview-empty">データを追加するとここにグラフが表示されます</div>
+        <div id="preview-busy" class="busy" hidden></div>
+      </div>
+    </div>
+    <div class="btn-row center">
+      <button id="btn-export" class="btn primary">画像を書き出し</button>
+      <button id="btn-save" class="btn">プロジェクトを保存</button>
+    </div>
+    <p id="graph-msg" class="hint center"></p>
+  </section>
+
+  <!-- ===== 右側: 設定 / 結果 ===== -->
+  <section id="pane-right" class="pane" aria-label="設定と結果">
+    <div class="seg rtabs" role="tablist">
+      <button role="tab" data-rtab="settings" class="active">グラフ設定</button>
+      <button role="tab" data-rtab="results">近似結果 <span id="msg-badge" class="badge" hidden></span></button>
+    </div>
+
+    <div id="rtab-settings" class="rtab">
+      <fieldset>
+        <legend>図のサイズ・文字</legend>
+        <label class="row"><span>用途</span><select id="s-preset"></select></label>
+        <div class="row"><span>幅 × 高さ (cm)</span>
+          <span class="pair"><input type="number" id="s-w" min="2" max="60" step="0.5" inputmode="decimal"> × <input type="number" id="s-h" min="2" max="60" step="0.5" inputmode="decimal"></span></div>
+        <label class="row"><span>フォント</span><select id="s-font"></select></label>
+        <label class="row"><span>文字サイズ (pt)</span><input type="number" id="s-fs" min="5" max="36" step="0.5" inputmode="decimal"></label>
+      </fieldset>
+      <fieldset>
+        <legend>ラベル</legend>
+        <label class="col"><span>X軸ラベル</span><input id="s-xlabel"></label>
+        <label class="col"><span>Y軸ラベル</span><input id="s-ylabel"></label>
+        <p class="hint">量記号を斜体にするには $ で囲みます (例: <code>$t$ / s</code>)</p>
+        <label class="row check"><input type="checkbox" id="s-showtitle"><span>図の下に図題を入れる</span></label>
+        <label class="col"><span>図題</span><input id="s-title"></label>
+      </fieldset>
+      <fieldset>
+        <legend>目盛りの表記</legend>
+        <label class="row check"><input type="checkbox" id="s-sci"><span>指数表記 (1.23×10³)</span></label>
+        <label class="row"><span>X軸 有効数字</span><input type="number" id="s-xsig" min="1" max="10" inputmode="numeric"></label>
+        <label class="row"><span>Y軸 有効数字</span><input type="number" id="s-ysig" min="1" max="10" inputmode="numeric"></label>
+      </fieldset>
+      <fieldset>
+        <legend>凡例・グリッド</legend>
+        <label class="row check"><input type="checkbox" id="s-legend"><span>凡例を表示</span></label>
+        <label class="row check"><input type="checkbox" id="s-datalegend"><span>データ点の凡例を表示</span></label>
+        <label class="row"><span>凡例の位置</span><select id="s-legloc"></select></label>
+        <label class="row check"><input type="checkbox" id="s-legframe"><span>凡例を枠で囲む</span></label>
+        <label class="row check"><input type="checkbox" id="s-grid"><span>グリッドを表示</span></label>
+      </fieldset>
+      <fieldset data-axis="x_axis">
+        <legend>X軸</legend>
+        <label class="row check"><input type="checkbox" data-k="auto"><span>範囲を自動で決める</span></label>
+        <div class="row"><span>範囲</span><span class="pair"><input type="number" data-k="min" step="any" inputmode="decimal"> 〜 <input type="number" data-k="max" step="any" inputmode="decimal"></span></div>
+        <label class="row check"><input type="checkbox" data-k="log"><span>対数軸</span></label>
+      </fieldset>
+      <fieldset data-axis="y_axis">
+        <legend>Y軸</legend>
+        <label class="row check"><input type="checkbox" data-k="auto"><span>範囲を自動で決める</span></label>
+        <div class="row"><span>範囲</span><span class="pair"><input type="number" data-k="min" step="any" inputmode="decimal"> 〜 <input type="number" data-k="max" step="any" inputmode="decimal"></span></div>
+        <label class="row check"><input type="checkbox" data-k="log"><span>対数軸</span></label>
+      </fieldset>
+    </div>
+
+    <div id="rtab-results" class="rtab">
+      <div class="btn-row"><button id="btn-copyres" class="btn sm">表をコピー</button></div>
+      <div class="table-wrap">
+        <table id="res-table" class="res-table">
+          <thead><tr><th>データ</th><th>近似</th><th>パラメータ</th><th>値</th><th>標準誤差</th><th>R²</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="res-empty" class="hint">近似を設定したデータセットがありません。</p>
+      <h3 class="sub">メッセージ</h3>
+      <ul id="msg-list" class="msg-list"></ul>
+    </div>
+  </section>
+</main>
+
+<nav class="tabbar" aria-label="画面の切り替え">
+  <button data-tab="graph" class="active"><svg viewBox="0 0 24 24"><path d="M4 4v16h16"/><path d="m7 15 4-5 3 3 5-6"/></svg><span>グラフ</span></button>
+  <button data-tab="data"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg><span>データ</span></button>
+  <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>設定</span></button>
+  <button data-tab="results"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg><span>結果</span><span id="msg-badge2" class="badge" hidden></span></button>
+</nav>
+
+<!-- ===== メニュー ===== -->
+<dialog id="dlg-menu" class="sheet">
+  <form method="dialog">
+    <h2>メニュー</h2>
+    <button class="menu-item" value="new">新しいプロジェクト</button>
+    <button class="menu-item" value="open">プロジェクトを開く (.gproj)</button>
+    <button class="menu-item" value="save">プロジェクトを保存 (.gproj)</button>
+    <hr>
+    <button class="menu-item" value="import">データを取り込み (CSV / Excel)</button>
+    <button class="menu-item" value="formula">数式からデータを生成</button>
+    <button class="menu-item" value="export">画像を書き出し</button>
+    <hr>
+    <button class="menu-item" value="help">使い方</button>
+    <button class="menu-item subtle" value="cancel">閉じる</button>
+  </form>
+</dialog>
+
+<!-- ===== 取り込み ===== -->
+<dialog id="dlg-import" class="sheet wide">
+  <form method="dialog" id="imp-form">
+    <h2>データの取り込み <small id="imp-file"></small></h2>
+    <label class="row" id="imp-sheet-row"><span>シート</span><select id="imp-sheet"></select></label>
+    <label class="row"><span>ヘッダ</span><select id="imp-header"><option value="0">自動判定</option><option value="1">1行目はヘッダ</option><option value="2">ヘッダなし</option></select></label>
+    <p id="imp-detected" class="hint"></p>
+    <label class="row"><span>X 列</span><select id="imp-x"></select></label>
+    <div class="col"><span>Y 列 (複数選ぶと複数のデータセット)</span><div id="imp-y" class="checks"></div></div>
+    <div class="row"><span>誤差列</span><span class="pair"><select id="imp-yerr" aria-label="Y誤差"></select><select id="imp-xerr" aria-label="X誤差"></select></span></div>
+    <p class="hint">誤差列: 左が Y誤差、右が X誤差</p>
+    <label class="row"><span>描き方</span><select id="imp-style"></select></label>
+    <div class="table-wrap preview-table"><table id="imp-preview" class="data-table"></table></div>
+    <p id="imp-error" class="status err"></p>
+    <div class="btn-row end">
+      <button class="btn" value="cancel">キャンセル</button>
+      <button class="btn primary" id="imp-ok" value="ok">取り込む</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== 数式から生成 ===== -->
+<dialog id="dlg-formula" class="sheet">
+  <form method="dialog" id="fx-form">
+    <h2>数式からデータを生成</h2>
+    <div class="seg">
+      <button type="button" data-fmode="y_fx" class="active">Y = f(X)</button>
+      <button type="button" data-fmode="x_const">X = 定数 (縦線)</button>
+    </div>
+    <div id="fx-yfx">
+      <label class="col"><span>数式 y =</span><input id="fx-expr" value="np.sin(x)" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <p id="fx-status" class="status"></p>
+      <label class="row"><span>X 開始</span><input type="number" id="fx-xmin" value="0" step="any" inputmode="decimal"></label>
+      <label class="row"><span>X 終了</span><input type="number" id="fx-xmax" value="10" step="any" inputmode="decimal"></label>
+      <label class="row"><span>点数</span><input type="number" id="fx-xn" value="100" min="2" inputmode="numeric"></label>
+    </div>
+    <div id="fx-xconst" hidden>
+      <label class="row"><span>X 定数</span><input type="number" id="fx-xc" value="0" step="any" inputmode="decimal"></label>
+      <label class="row"><span>Y 開始</span><input type="number" id="fx-ymin" value="-10" step="any" inputmode="decimal"></label>
+      <label class="row"><span>Y 終了</span><input type="number" id="fx-ymax" value="10" step="any" inputmode="decimal"></label>
+      <label class="row"><span>点数</span><input type="number" id="fx-yn" value="100" min="2" inputmode="numeric"></label>
+    </div>
+    <label class="row check"><input type="checkbox" id="fx-replace"><span>選択中のデータを置き換える</span></label>
+    <p id="fx-error" class="status err"></p>
+    <div class="btn-row end">
+      <button class="btn" value="cancel">キャンセル</button>
+      <button class="btn primary" id="fx-ok" value="ok">生成</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== 貼り付け / テキスト編集 ===== -->
+<dialog id="dlg-text" class="sheet">
+  <form method="dialog">
+    <h2 id="txt-title">テキストで編集</h2>
+    <p class="hint">1 行に「X, Y, Y誤差, X誤差」(誤差は省略可)。カンマ・タブ・空白区切り。Excel からのコピーもそのまま貼れます。</p>
+    <textarea id="txt-area" rows="12" spellcheck="false" autocapitalize="off"></textarea>
+    <div class="btn-row end">
+      <button class="btn" value="cancel">キャンセル</button>
+      <button class="btn" id="txt-append" value="append">末尾に追加</button>
+      <button class="btn primary" id="txt-ok" value="replace">置き換え</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== 書き出し ===== -->
+<dialog id="dlg-export" class="sheet">
+  <form method="dialog">
+    <h2>画像を書き出し</h2>
+    <label class="row"><span>形式</span><select id="ex-fmt">
+      <option value="png">PNG 画像</option>
+      <option value="pdf">PDF (ベクター・論文向け)</option>
+      <option value="svg">SVG (ベクター)</option>
+      <option value="eps">EPS (ベクター)</option>
+      <option value="tiff">TIFF 画像</option>
+    </select></label>
+    <label class="row"><span>解像度 (dpi)</span><input type="number" id="ex-dpi" min="72" max="1200" step="50" value="300" inputmode="numeric"></label>
+    <p id="ex-size" class="hint"></p>
+    <label class="row check"><input type="checkbox" id="ex-tight"><span>周囲の余白を切り詰める</span></label>
+    <p id="ex-error" class="status err"></p>
+    <div class="btn-row end wrap">
+      <button class="btn" value="cancel">閉じる</button>
+      <button class="btn" type="button" id="ex-copy">コピー</button>
+      <button class="btn" type="button" id="ex-share" hidden>共有</button>
+      <button class="btn primary" type="button" id="ex-download">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== 使い方 ===== -->
+<dialog id="dlg-help" class="sheet wide">
+  <form method="dialog">
+    <h2>使い方</h2>
+    <div class="help">
+      <p>データをプロットし、線形近似・非線形近似 (カスタム式)・Savitzky-Golay 平滑化を行います。設定を変えるとグラフはすぐに更新されます。計算はすべてこの端末の中で行われ、データが外部に送られることはありません。</p>
+      <h3>データを入れる</h3>
+      <ul>
+        <li><b>＋ 新規</b> … 空のデータセットを作り、表に入力します。</li>
+        <li><b>貼り付け / テキストで編集</b> … Excel などからコピーした表 (X, Y, Y誤差, X誤差) をまとめて入力できます。</li>
+        <li><b>取り込み</b> … CSV / TSV / TXT / Excel (xlsx) を読み込みます。ヘッダ行と誤差列は自動判定します。</li>
+        <li><b>数式</b> … <code>np.sin(x)</code> のような数式からデータを作ります。</li>
+      </ul>
+      <h3>近似</h3>
+      <ul>
+        <li>非線形 (カスタム) は <code>a * exp(-b * x) + c</code> のように書きます。x 以外の名前 (a, b, c …) がフィットパラメータになります。</li>
+        <li>Y誤差を入れたデータは「Y 誤差で重み付けする」で重み付きフィットができます。</li>
+      </ul>
+      <h3>保存と書き出し</h3>
+      <ul>
+        <li><b>プロジェクトを保存</b> … <code>.gproj</code> ファイルとして保存します。PC 版 (Windows) と同じ形式なので、PC と スマホ の間でそのまま開けます。</li>
+        <li><b>画像を書き出し</b> … PNG / PDF / SVG / EPS / TIFF。図は「グラフ設定」の幅 × 高さ (cm) どおりの大きさになります。</li>
+        <li>作業中のプロジェクトはこのブラウザに自動で保存され、次に開いたときに復元されます。</li>
+      </ul>
+      <h3>ホーム画面に追加</h3>
+      <p>iPhone は Safari の共有ボタン →「ホーム画面に追加」、Android は Chrome のメニュー →「ホーム画面に追加」で、アプリのように起動できます。一度読み込めばオフラインでも使えます (Excel の取り込みは初回のみ通信が必要)。</p>
+      <p class="hint" id="help-version"></p>
+    </div>
+    <div class="btn-row end"><button class="btn primary" value="close">閉じる</button></div>
+  </form>
+</dialog>
+
+<input type="file" id="file-open" accept=".gproj,application/json" hidden>
+<input type="file" id="file-import" accept=".csv,.tsv,.txt,.dat,.xlsx,.xlsm,.gproj,text/csv,text/plain" hidden>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="app.js?v=2.3.0-202610122324"></script>
+</body>
+</html>

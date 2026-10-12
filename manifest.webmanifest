@@ -1,0 +1,16 @@
+{
+  "name": "グラフ生成アプリ",
+  "short_name": "グラフ生成",
+  "description": "データのプロットと近似 (線形・非線形・Savitzky-Golay)。論文・レポート向けの体裁で書き出せます。",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#1f77b4",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
