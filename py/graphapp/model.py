@@ -82,15 +82,16 @@ class FitSpec:
 class Dataset:
     id: int = 0
     name: str = "データ1"
-    color: str = "#1f77b4"
+    # 既定の点: 黒の丸・塗りつぶしなし (白抜き)
+    color: str = "#000000"
     style: str = "points"
     visible: bool = True
     x: list = field(default_factory=list)
     y: list = field(default_factory=list)
     yerr: list = field(default_factory=list)
     xerr: list = field(default_factory=list)
-    marker: str = "auto"
-    filled: bool = True
+    marker: str = "o"
+    filled: bool = False
     marker_size: float = 5.0
     line_width: float = 1.5
     fit: FitSpec = field(default_factory=FitSpec)
@@ -221,8 +222,7 @@ class Project:
         ds = Dataset(id=self.next_id, **kwargs)
         if "name" not in kwargs:
             ds.name = f"データ{self.next_id}"
-        if "color" not in kwargs:
-            ds.color = DEFAULT_COLORS[(self.next_id - 1) % len(DEFAULT_COLORS)]
+        # 色・マーカーは既定値 (黒の白抜き丸) のまま。データセットごとに変えたいときは個別に設定する
         self.next_id += 1
         return ds
 

@@ -3,10 +3,10 @@
  *  - Pyodide (jsDelivr) と openpyxl (PyPI): 取得したものをそのまま保存して再利用 */
 "use strict";
 
-const VERSION = "2.3.0-202610122327";
+const VERSION = "2.3.1-202610122341";
 const APP_CACHE = `graphapp-app-${VERSION}`;
 const RUNTIME_CACHE = "graphapp-runtime-v1";
-const PRECACHE = ["./", "index.html", "style.css?v=2.3.0-202610122327", "app.js?v=2.3.0-202610122327", "worker.js?v=2.3.0-202610122327", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "assets/fonts/ipaexg.ttf", "py/graphapp/__init__.py?v=2.3.0-202610122327", "py/graphapp/model.py?v=2.3.0-202610122327", "py/graphapp/fitting.py?v=2.3.0-202610122327", "py/graphapp/numerics.py?v=2.3.0-202610122327", "py/graphapp/safe_expr.py?v=2.3.0-202610122327", "py/graphapp/texfmt.py?v=2.3.0-202610122327", "py/graphapp/plot_core.py?v=2.3.0-202610122327", "py/graphapp/io_utils.py?v=2.3.0-202610122327", "py/webapi.py?v=2.3.0-202610122327"];
+const PRECACHE = ["./", "index.html", "style.css?v=2.3.1-202610122341", "app.js?v=2.3.1-202610122341", "worker.js?v=2.3.1-202610122341", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "assets/fonts/ipaexg.ttf", "py/graphapp/__init__.py?v=2.3.1-202610122341", "py/graphapp/model.py?v=2.3.1-202610122341", "py/graphapp/fitting.py?v=2.3.1-202610122341", "py/graphapp/numerics.py?v=2.3.1-202610122341", "py/graphapp/safe_expr.py?v=2.3.1-202610122341", "py/graphapp/texfmt.py?v=2.3.1-202610122341", "py/graphapp/plot_core.py?v=2.3.1-202610122341", "py/graphapp/io_utils.py?v=2.3.1-202610122341", "py/webapi.py?v=2.3.1-202610122341"];
 const RUNTIME_HOSTS = ["cdn.jsdelivr.net", "pypi.org", "files.pythonhosted.org"];
 
 self.addEventListener("install", (event) => {

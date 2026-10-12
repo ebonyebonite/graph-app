@@ -13,7 +13,7 @@ const MERGE_MS = 1500;      // 同じ項目の連続入力は 1 回の「元に�
 /* ======================================================================
  * Worker (Python) との通信
  * ==================================================================== */
-const worker = new Worker("worker.js?v=2.3.0-202610122327");
+const worker = new Worker("worker.js?v=2.3.1-202610122341");
 let rpcSeq = 0;
 const pending = new Map();
 worker.onmessage = (ev) => {
@@ -160,8 +160,7 @@ function getPath(obj, path) {
 function newDataset(p, fields = {}) {
   const ds = clone(state.defaults.dataset);
   ds.id = p.next_id;
-  ds.name = `データ${p.next_id}`;
-  ds.color = state.defaults.colors[(p.next_id - 1) % state.defaults.colors.length];
+  ds.name = `データ${p.next_id}`;   // 色・マーカーは既定値 (黒の白抜き丸)
   p.next_id += 1;
   Object.assign(ds, fields);
   const n = Math.max(ds.x.length, ds.y.length);
@@ -1173,7 +1172,7 @@ async function start() {
   try {
     const r = await rpc("init");
     state.defaults = r.defaults;
-    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.0-202610122327`;
+    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.1-202610122341`;
   } catch (e) {
     showFatal(e.message);
     return;
