@@ -13,7 +13,7 @@ const MERGE_MS = 1500;      // 同じ項目の連続入力は 1 回の「元に�
 /* ======================================================================
  * Worker (Python) との通信
  * ==================================================================== */
-const worker = new Worker("worker.js?v=2.3.0-202610122324");
+const worker = new Worker("worker.js?v=2.3.0-202610122327");
 let rpcSeq = 0;
 const pending = new Map();
 worker.onmessage = (ev) => {
@@ -643,6 +643,19 @@ function newProject() {
   state.fileName = "graph.gproj";
 }
 
+function wipeLocalData() {
+  // 共用端末向け: 自動保存した作業内容・書き出し設定を消し、画面も空にする
+  if (!confirm("このブラウザに保存された作業内容を消去して、空の状態に戻しますか? (元に戻せません)")) return;
+  clearTimeout(autosaveTimer);
+  try { localStorage.removeItem(AUTOSAVE_KEY); localStorage.removeItem(EXPORT_KEY); } catch (e) { /* 無視 */ }
+  state.project = clone(state.defaults.project);
+  state.fileName = "graph.gproj";
+  state.undo = []; state.redo = []; state.lastKey = null;
+  state.selectedId = null;
+  renderList(); renderEditor(); renderSettings(); updateUndoButtons(); scheduleRender(0);
+  toast("保存データを消去しました");
+}
+
 function b64FromBuffer(buf) {
   const bytes = new Uint8Array(buf);
   let s = "";
@@ -931,6 +944,7 @@ function wireUp() {
       new: newProject, open: () => $("file-open").click(), save: saveProject,
       import: () => $("file-import").click(), formula: openFormula, export: openExport,
       help: () => $("dlg-help").showModal(),
+      wipe: wipeLocalData,
     }[v] || (() => {}))();
   });
   $("btn-save").onclick = saveProject;
@@ -1159,7 +1173,7 @@ async function start() {
   try {
     const r = await rpc("init");
     state.defaults = r.defaults;
-    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.0-202610122324`;
+    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.0-202610122327`;
   } catch (e) {
     showFatal(e.message);
     return;

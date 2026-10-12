@@ -4,12 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1f77b4">
+<!-- このサイトのファイル以外のスクリプトを画面で実行させない (Python の読み込みは worker.js 側で行う) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
 <meta name="description" content="データのプロットと近似 (線形・非線形・Savitzky-Golay) を行うグラフ作成アプリ。論文・レポート向けの体裁で書き出せます。">
 <title>グラフ生成アプリ</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=2.3.0-202610122324">
+<link rel="stylesheet" href="style.css?v=2.3.0-202610122327">
 </head>
 <body data-tab="graph" data-rtab="settings">
 
@@ -220,6 +223,7 @@
     <button class="menu-item" value="export">画像を書き出し</button>
     <hr>
     <button class="menu-item" value="help">使い方</button>
+    <button class="menu-item" value="wipe">このブラウザの保存データを消去</button>
     <button class="menu-item subtle" value="cancel">閉じる</button>
   </form>
 </dialog>
@@ -318,7 +322,13 @@
   <form method="dialog">
     <h2>使い方</h2>
     <div class="help">
-      <p>データをプロットし、線形近似・非線形近似 (カスタム式)・Savitzky-Golay 平滑化を行います。設定を変えるとグラフはすぐに更新されます。計算はすべてこの端末の中で行われ、データが外部に送られることはありません。</p>
+      <p>データをプロットし、線形近似・非線形近似 (カスタム式)・Savitzky-Golay 平滑化を行います。設定を変えるとグラフはすぐに更新されます。</p>
+      <h3>データの扱い</h3>
+      <ul>
+        <li>計算はすべてこの端末の中で行われ、入力したデータやファイルが外部に送られることはありません。</li>
+        <li>起動時に、ブラウザで Python を動かすための部品を jsDelivr (CDN) から、Excel 読み込み用の部品を PyPI から取得します (データは送りません)。</li>
+        <li>作業中の内容はこのブラウザ内に保存されます。共用の端末で使ったときは、メニューの「このブラウザの保存データを消去」で消してください。</li>
+      </ul>
       <h3>データを入れる</h3>
       <ul>
         <li><b>＋ 新規</b> … 空のデータセットを作り、表に入力します。</li>
@@ -349,6 +359,6 @@
 <input type="file" id="file-import" accept=".csv,.tsv,.txt,.dat,.xlsx,.xlsm,.gproj,text/csv,text/plain" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<script src="app.js?v=2.3.0-202610122324"></script>
+<script src="app.js?v=2.3.0-202610122327"></script>
 </body>
 </html>
