@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f77b4">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="ラボつみき: 実験器具を積み木のようにつないで、論文・レポートにそのまま使える白黒の実験装置図 (SVG / PNG / PDF) を作るアプリ。出力した図は CC0 (パブリックドメイン) です。">
+<title>ラボつみき — 実験装置図エディタ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css?v=1.0.0">
+</head>
+<body>
+
+<header class="topbar">
+  <button id="btn-palette" class="icon-btn only-narrow" title="部品" aria-label="部品の一覧">
+    <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+  </button>
+  <h1 class="brand"><img src="icons/icon.svg" alt="" width="28" height="28">ラボつみき<span class="ver">v1.0.0</span></h1>
+  <div class="tb-group">
+    <button id="btn-templates" class="btn" aria-haspopup="menu">ひな形</button>
+    <button id="btn-file" class="btn" aria-haspopup="menu">ファイル</button>
+    <button id="btn-export" class="btn primary">書き出し</button>
+  </div>
+  <div class="tb-group">
+    <button id="btn-undo" class="icon-btn" title="元に戻す (Ctrl+Z)" aria-label="元に戻す" disabled>
+      <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+    </button>
+    <button id="btn-redo" class="icon-btn" title="やり直し (Ctrl+Y)" aria-label="やり直し" disabled>
+      <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+    </button>
+  </div>
+  <div class="tb-group">
+    <button id="btn-hose" class="btn toggle" aria-pressed="false" title="ホース口を 2 つ順に押してつなぐ (H)">ホース</button>
+    <button id="btn-tidy" class="btn" title="床に揃え、左から並べ直す">整列</button>
+    <button id="btn-fit" class="icon-btn" title="全体を表示 (0)" aria-label="全体を表示">
+      <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    </button>
+  </div>
+  <button id="btn-inspector" class="icon-btn only-narrow" title="設定" aria-label="設定">
+    <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+  </button>
+</header>
+
+<main class="layout">
+  <aside id="palette" class="panel palette" aria-label="部品の一覧">
+    <div class="panel-head">
+      <input id="palette-search" type="search" placeholder="部品を探す (例: 冷却管)" aria-label="部品を探す">
+    </div>
+    <p class="hint">押すと選んでいる部品の空いている口に自動でつながります。キャンバスへドラッグしても置けます。</p>
+    <div id="palette-list"></div>
+  </aside>
+
+  <section class="stage" aria-label="図">
+    <svg id="canvas" xmlns="http://www.w3.org/2000/svg" tabindex="0" role="img" aria-label="実験装置図">
+      <defs>
+        <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M10 0H0V10" fill="none" class="grid-line"/></pattern>
+      </defs>
+      <g id="viewport">
+        <rect id="grid-bg" x="-5000" y="-5000" width="10000" height="10000" fill="url(#grid)"/>
+        <rect id="paper" class="paper"/>
+        <g id="scene"></g>
+        <g id="overlay"></g>
+      </g>
+    </svg>
+    <div id="paper-size" class="paper-size"></div>
+    <div id="hint-bar" class="hint-bar" role="status" aria-live="polite"></div>
+    <div id="empty" class="empty">
+      <p>左の一覧から部品を選ぶか、<br>「ひな形」から装置を読み込んで始めます。</p>
+      <button id="btn-empty-tpl" class="btn primary">ひな形から始める</button>
+    </div>
+  </section>
+
+  <aside id="inspector" class="panel inspector" aria-label="設定"></aside>
+</main>
+
+<div id="menu" class="menu" role="menu" hidden></div>
+
+<dialog id="export-dialog" class="dialog">
+  <form method="dialog">
+    <h2>書き出し</h2>
+    <p class="hint">線の太さと文字の大きさは、書き出した図の上での値です (図の幅を変えても変わりません)。</p>
+    <div class="dlg-grid">
+      <label>図の幅<select id="ex-width"></select></label>
+      <label>幅 (mm)<input id="ex-width-mm" type="number" min="20" max="400" step="1" inputmode="decimal"></label>
+      <label>線の太さ (mm)<input id="ex-lw" type="number" min="0.05" max="2" step="0.05" inputmode="decimal"></label>
+      <label>文字 (pt)<input id="ex-font" type="number" min="4" max="24" step="0.5" inputmode="decimal"></label>
+      <label>PNG の解像度<select id="ex-dpi"><option value="300">300 dpi</option><option value="600" selected>600 dpi</option><option value="1200">1200 dpi</option></select></label>
+      <label class="check"><input id="ex-bg" type="checkbox" checked> PNG の背景を白にする</label>
+    </div>
+    <p id="ex-info" class="hint"></p>
+    <div class="btn-row">
+      <button value="svg" class="btn primary">SVG</button>
+      <button value="png" class="btn">PNG</button>
+      <button value="print" class="btn">印刷 / PDF</button>
+      <button value="cancel" class="btn ghost">閉じる</button>
+    </div>
+    <p class="hint small">この図は CC0 (パブリックドメイン) です。出典の表示なしで論文・レポートに使えます。</p>
+  </form>
+</dialog>
+
+<input id="file-input" type="file" accept=".json,application/json" hidden>
+<div id="print-area" aria-hidden="true"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="module" src="js/app.js?v=1.0.0"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "labtsumiki",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "gallery": "node tools/gallery.mjs",
+    "templates": "node tools/templates.mjs"
+  }
+}
