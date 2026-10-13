@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#e6f4ec"/>
+  <g transform="translate(35.8 35.8) scale(0.86)">
+  <defs>
+    <clipPath id="body"><circle cx="256" cy="268" r="92"/></clipPath>
+  </defs>
+  <!-- 積み木 -->
+  <g stroke="#3d3029" stroke-width="10" stroke-linejoin="round">
+    <rect x="92" y="352" width="160" height="112" rx="16" fill="#f6a38e"/>
+    <rect x="260" y="352" width="160" height="112" rx="16" fill="#ffd86b"/>
+  </g>
+  <circle cx="172" cy="408" r="22" fill="none" stroke="#3d3029" stroke-width="8"/>
+  <path d="M340 386 L364 428 L316 428 Z" fill="none" stroke="#3d3029" stroke-width="8" stroke-linejoin="round"/>
+  <!-- 丸底フラスコ -->
+  <g stroke="#3d3029" stroke-width="10" stroke-linejoin="round">
+    <path d="M226 96 V186 A92 92 0 1 0 286 186 V96 Z" fill="#ffffff"/>
+  </g>
+  <g clip-path="url(#body)">
+    <path d="M150 300 Q180 288 210 300 T270 300 T330 300 T370 300 V380 H150 Z" fill="#9fd3f5"/>
+  </g>
+  <path d="M226 96 V186 A92 92 0 1 0 286 186 V96" fill="none" stroke="#3d3029" stroke-width="10" stroke-linejoin="round"/>
+  <rect x="212" y="74" width="88" height="26" rx="10" fill="#ffffff" stroke="#3d3029" stroke-width="10"/>
+  <!-- 顔 -->
+  <circle cx="226" cy="244" r="11" fill="#3d3029"/>
+  <circle cx="286" cy="244" r="11" fill="#3d3029"/>
+  <circle cx="229" cy="240" r="3.5" fill="#ffffff"/>
+  <circle cx="289" cy="240" r="3.5" fill="#ffffff"/>
+  <path d="M240 266 Q256 282 272 266" fill="none" stroke="#3d3029" stroke-width="8" stroke-linecap="round"/>
+  <ellipse cx="200" cy="266" rx="15" ry="9" fill="#f7a6b4"/>
+  <ellipse cx="312" cy="266" rx="15" ry="9" fill="#f7a6b4"/>
+  <!-- 泡 -->
+  <circle cx="316" cy="52" r="12" fill="#ffffff" stroke="#3d3029" stroke-width="7"/>
+  <circle cx="348" cy="24" r="7" fill="#ffffff" stroke="#3d3029" stroke-width="6"/>
+</g>
+</svg>

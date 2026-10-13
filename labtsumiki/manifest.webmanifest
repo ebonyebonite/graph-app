@@ -1,0 +1,17 @@
+{
+  "name": "ラボつみき — 実験装置図エディタ",
+  "short_name": "ラボつみき",
+  "description": "実験器具を積み木のようにつないで、論文・レポート用の白黒の実験装置図を作る。出力は CC0。",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#e6f4ec",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
