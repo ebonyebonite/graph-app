@@ -1,0 +1,12 @@
+{
+  "name": "実験装置図メーカー",
+  "short_name": "装置図",
+  "description": "実験器具を積み木のようにつないで、論文・レポート用の実験装置図を作る。出力は CC0。",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#1f77b4",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
