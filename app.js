@@ -13,7 +13,7 @@ const MERGE_MS = 1500;      // 同じ項目の連続入力は 1 回の「元に�
 /* ======================================================================
  * Worker (Python) との通信
  * ==================================================================== */
-const worker = new Worker("worker.js?v=2.3.1-202610122341");
+const worker = new Worker("worker.js?v=2.3.1-202610131200");
 let rpcSeq = 0;
 const pending = new Map();
 worker.onmessage = (ev) => {
@@ -43,6 +43,8 @@ function rpc(cmd, args) {
 const state = {
   ready: false,
   defaults: null,
+  docs: [],           // 開いているグラフ (タブ) ごとの状態。編集中のものは下の項目に展開してある
+  active: 0,
   project: null,
   selectedId: null,
   undo: [], redo: [],
@@ -51,6 +53,7 @@ const state = {
   xlim: null, ylim: null,
   showAllRows: false,
   fileName: "graph.gproj",
+  previewSrc: null,
 };
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -139,7 +142,9 @@ let autosaveTimer = 0;
 function scheduleAutosave() {
   clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
-    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ project: state.project, name: state.fileName })); }
+    stashDoc();
+    const docs = state.docs.map((d) => ({ project: d.project, name: d.fileName }));
+    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ docs, active: state.active })); }
     catch (e) { /* 保存できない環境 (プライベートモード等) は無視 */ }
   }, 400);
 }
@@ -152,6 +157,128 @@ function setPath(obj, path, value) {
 }
 function getPath(obj, path) {
   return path.split(".").reduce((o, p) => (o == null ? o : o[p]), obj);
+}
+
+/* ======================================================================
+ * 複数のグラフ (タブ)
+ *  編集中のグラフの状態は state 直下に展開し、切り替えるときに docs[] と入れ替える。
+ *  元に戻す履歴・選択中のデータセット・近似結果などはグラフごとに別々に持つ。
+ * ==================================================================== */
+const DOC_KEYS = ["project", "fileName", "selectedId", "undo", "redo", "lastKey", "lastTime",
+  "results", "messages", "xlim", "ylim", "showAllRows", "previewSrc"];
+let docSeq = 0;
+
+function makeDoc(project, fileName) {
+  return {
+    uid: ++docSeq, project, fileName,
+    selectedId: project.datasets.length ? project.datasets[0].id : null,
+    undo: [], redo: [], lastKey: null, lastTime: 0,
+    results: [], messages: [], xlim: null, ylim: null, showAllRows: false, previewSrc: null,
+  };
+}
+const curDoc = () => state.docs[state.active];
+const docLabel = (d) => (d.fileName || "graph.gproj").replace(/\.gproj$/i, "");
+function stashDoc() {
+  const d = curDoc();
+  if (d) for (const k of DOC_KEYS) d[k] = state[k];
+}
+function loadDoc(i) {
+  state.active = i;
+  const d = curDoc();
+  for (const k of DOC_KEYS) state[k] = d[k];
+}
+function uniqueFileName(base = "graph") {
+  const used = new Set(state.docs.map(docLabel));
+  if (!used.has(base)) return `${base}.gproj`;
+  for (let n = 2; ; n++) if (!used.has(`${base}${n}`)) return `${base}${n}.gproj`;
+}
+const isBlankDoc = () => !state.project.datasets.length && !state.undo.length && !state.redo.length;
+
+function refreshAll() {
+  // グラフを切り替えた・読み込んだときに画面全体を描き直す
+  const img = $("preview-img");
+  if (state.previewSrc) { img.src = state.previewSrc; img.hidden = false; $("preview-empty").hidden = true; }
+  else { img.hidden = true; img.removeAttribute("src"); $("preview-empty").hidden = false; }
+  renderTabs();
+  renderResults();
+  afterChange(true);
+  scheduleRender(0);
+}
+
+function switchDoc(i) {
+  if (i === state.active || !state.docs[i]) return;
+  stashDoc();
+  loadDoc(i);
+  refreshAll();
+}
+
+function openDoc(project, fileName) {
+  stashDoc();
+  state.docs.push(makeDoc(project, fileName || uniqueFileName()));
+  loadDoc(state.docs.length - 1);
+  refreshAll();
+}
+
+function newDoc() {
+  const fresh = clone(state.defaults.project);
+  fresh.settings = clone(state.project.settings);   // グラフ設定は引き継ぐ
+  openDoc(fresh);
+  if (!window.matchMedia("(min-width: 900px)").matches) setTab("data");
+}
+
+function duplicateDoc() {
+  openDoc(clone(state.project), uniqueFileName(`${docLabel(curDoc())} のコピー`));
+  toast("グラフを複製しました");
+}
+
+function closeDoc(i) {
+  const d = i === state.active ? state : state.docs[i];
+  if (d.project.datasets.length
+      && !confirm(`「${docLabel(d)}」を閉じますか? 保存していない内容は失われます (元に戻せません)`)) return;
+  stashDoc();
+  state.docs.splice(i, 1);
+  if (!state.docs.length) state.docs.push(makeDoc(clone(state.defaults.project), "graph.gproj"));
+  loadDoc(Math.min(i < state.active ? state.active - 1 : state.active, state.docs.length - 1));
+  refreshAll();
+}
+
+function renameDoc() {
+  const cur = docLabel(state);
+  const v = prompt("グラフの名前 (保存・書き出しのファイル名になります)", cur);
+  if (v === null || !v.trim() || v.trim() === cur) return;
+  state.fileName = v.trim().replace(/[\\/:*?"<>|]/g, "_") + ".gproj";
+  renderTabs();
+  scheduleAutosave();
+}
+
+function renderTabs() {
+  stashDoc();
+  const bar = $("doc-tabs");
+  bar.textContent = "";
+  state.docs.forEach((d, i) => {
+    const active = i === state.active;
+    const tab = document.createElement("div");
+    tab.className = "doctab" + (active ? " active" : "");
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "doctab-name";
+    name.setAttribute("role", "tab");
+    name.setAttribute("aria-selected", String(active));
+    name.textContent = docLabel(d);
+    name.title = active ? `${docLabel(d)} (もう一度押すと名前を変更)` : docLabel(d);
+    name.onclick = () => (active ? renameDoc() : switchDoc(i));
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "doctab-close";
+    close.textContent = "×";
+    close.title = "このグラフを閉じる";
+    close.setAttribute("aria-label", `「${docLabel(d)}」を閉じる`);
+    close.onclick = () => closeDoc(i);
+    tab.append(name, close);
+    bar.append(tab);
+  });
+  const cur = bar.children[state.active];
+  if (cur) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 /* ======================================================================
@@ -530,8 +657,10 @@ async function doRender() {
   dpi = Math.max(20, Math.min(dpi, maxDpi, 600));
   rendering = true;
   $("preview-busy").hidden = false;
+  const doc = curDoc();
   try {
     const r = await rpc("render", { project: state.project, fmt: "png", dpi });
+    if (doc !== curDoc()) { renderAgain = true; return; }   // 描画中に別のグラフへ切り替えた
     if (!r.ok) throw new Error(r.error);
     const img = $("preview-img");
     if (r.empty) {
@@ -539,9 +668,9 @@ async function doRender() {
       $("preview-empty").hidden = false;
       $("preview-empty").textContent = state.project.datasets.length
         ? "表示するデータがありません (すべて非表示です)" : "データを追加するとここにグラフが表示されます";
-      state.results = []; state.xlim = state.ylim = null;
+      state.results = []; state.xlim = state.ylim = null; state.previewSrc = null;
     } else {
-      img.src = "data:image/png;base64," + r.image;
+      state.previewSrc = img.src = "data:image/png;base64," + r.image;
       img.hidden = false;
       $("preview-empty").hidden = true;
       state.results = r.results; state.xlim = r.xlim; state.ylim = r.ylim;
@@ -550,6 +679,7 @@ async function doRender() {
     renderResults();
     showAutoLimits();
   } catch (e) {
+    if (doc !== curDoc()) { renderAgain = true; return; }
     state.messages = [String(e.message || e)];
     renderResults();
   } finally {
@@ -623,23 +753,16 @@ async function loadProjectText(text, name) {
   try { data = JSON.parse(text); } catch (e) { toast("プロジェクトファイルの形式が正しくありません"); return; }
   const r = await rpc("normalize", { project: data });
   if (!r.ok) { toast(r.error); return; }
-  state.project = r.project;
-  state.fileName = name || "graph.gproj";
-  state.undo = []; state.redo = []; state.lastKey = null;
-  state.selectedId = state.project.datasets.length ? state.project.datasets[0].id : null;
-  afterChange(true);
-  toast(`${state.fileName} を開きました`);
-}
-
-function newProject() {
-  if (state.project.datasets.length && !confirm("新しいプロジェクトを作りますか? (今の内容は「元に戻す」で戻せます)")) return;
-  commit("新しいプロジェクト", (p) => {
-    const fresh = clone(state.defaults.project);
-    fresh.settings = clone(p.settings);   // グラフ設定は引き継ぐ
-    for (const k of Object.keys(p)) delete p[k];
-    Object.assign(p, fresh);
-  }, { refresh: "all" });
-  state.fileName = "graph.gproj";
+  name = name || uniqueFileName();
+  if (isBlankDoc()) {   // 空のタブはそのまま使い、そうでなければ新しいタブで開く
+    stashDoc();
+    state.docs[state.active] = makeDoc(r.project, name);
+    loadDoc(state.active);
+    refreshAll();
+  } else {
+    openDoc(r.project, name);
+  }
+  toast(`${name} を開きました`);
 }
 
 function wipeLocalData() {
@@ -647,11 +770,10 @@ function wipeLocalData() {
   if (!confirm("このブラウザに保存された作業内容を消去して、空の状態に戻しますか? (元に戻せません)")) return;
   clearTimeout(autosaveTimer);
   try { localStorage.removeItem(AUTOSAVE_KEY); localStorage.removeItem(EXPORT_KEY); } catch (e) { /* 無視 */ }
-  state.project = clone(state.defaults.project);
-  state.fileName = "graph.gproj";
-  state.undo = []; state.redo = []; state.lastKey = null;
-  state.selectedId = null;
-  renderList(); renderEditor(); renderSettings(); updateUndoButtons(); scheduleRender(0);
+  state.docs = [makeDoc(clone(state.defaults.project), "graph.gproj")];
+  loadDoc(0);
+  refreshAll();
+  clearTimeout(autosaveTimer);
   toast("保存データを消去しました");
 }
 
@@ -940,7 +1062,8 @@ function wireUp() {
     const v = $("dlg-menu").returnValue;
     $("dlg-menu").returnValue = "";
     ({
-      new: newProject, open: () => $("file-open").click(), save: saveProject,
+      new: newDoc, dup: duplicateDoc, rename: renameDoc,
+      open: () => $("file-open").click(), save: saveProject,
       import: () => $("file-import").click(), formula: openFormula, export: openExport,
       help: () => $("dlg-help").showModal(),
       wipe: wipeLocalData,
@@ -949,9 +1072,10 @@ function wireUp() {
   $("btn-save").onclick = saveProject;
   $("btn-export").onclick = openExport;
   $("file-open").onchange = async (e) => {
-    const f = e.target.files[0]; e.target.value = "";
-    if (f) loadProjectText(await f.text(), f.name);
+    const files = [...e.target.files]; e.target.value = "";
+    for (const f of files) await loadProjectText(await f.text(), f.name);   // 複数選ぶとそれぞれ別のタブで開く
   };
+  $("btn-newdoc").onclick = newDoc;
   $("file-import").onchange = (e) => {
     const f = e.target.files[0]; e.target.value = "";
     if (f) startImport(f).catch((err) => toast(String(err.message || err)));
@@ -1155,10 +1279,14 @@ function wireUp() {
 
   // ファイルのドラッグ&ドロップ (PC)
   document.addEventListener("dragover", (e) => { e.preventDefault(); });
-  document.addEventListener("drop", (e) => {
+  document.addEventListener("drop", async (e) => {
     e.preventDefault();
-    const f = e.dataTransfer.files[0];
-    if (f) startImport(f).catch((err) => toast(String(err.message || err)));
+    const files = [...e.dataTransfer.files];
+    const projects = files.filter((f) => /\.gproj$/i.test(f.name));
+    try {
+      for (const f of projects) await loadProjectText(await f.text(), f.name);
+      if (!projects.length && files[0]) await startImport(files[0]);
+    } catch (err) { toast(String(err.message || err)); }
   });
 
   // プレビューの大きさが変わったら描き直す
@@ -1172,22 +1300,27 @@ async function start() {
   try {
     const r = await rpc("init");
     state.defaults = r.defaults;
-    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.1-202610122341`;
+    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.1-202610131200`;
   } catch (e) {
     showFatal(e.message);
     return;
   }
-  state.project = clone(state.defaults.project);
+  let active = 0;
   try {
     const saved = JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || "null");
-    if (saved && saved.project) {
-      const n = await rpc("normalize", { project: saved.project });
-      if (n.ok) { state.project = n.project; state.fileName = saved.name || "graph.gproj"; }
+    // 以前の版はグラフ 1 つだけを { project, name } で保存していた
+    const items = saved && Array.isArray(saved.docs) ? saved.docs : saved && saved.project ? [saved] : [];
+    for (const it of items) {
+      const n = await rpc("normalize", { project: it.project });
+      if (n.ok) state.docs.push(makeDoc(n.project, it.name || "graph.gproj"));
     }
+    if (saved && Number.isInteger(saved.active)) active = saved.active;
   } catch (e) { /* 復元できなければ新規 */ }
-  state.selectedId = state.project.datasets.length ? state.project.datasets[0].id : null;
+  if (!state.docs.length) state.docs.push(makeDoc(clone(state.defaults.project), "graph.gproj"));
+  loadDoc(Math.max(0, Math.min(active, state.docs.length - 1)));
   wireUp();
   state.ready = true;
+  renderTabs();
   afterChange(true);
   $("splash").classList.add("done");
   setTimeout(() => $("splash").remove(), 400);

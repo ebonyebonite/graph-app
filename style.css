@@ -16,6 +16,7 @@
   --radius: 12px;
   --tabbar-h: 60px;
   --topbar-h: 52px;
+  --doctabs-h: 44px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -92,6 +93,38 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 0.92em; backgr
 }
 .icon-btn.danger { color: var(--danger); }
 
+/* ---------- グラフのタブ ---------- */
+.doctabs {
+  position: sticky; top: calc(var(--topbar-h) + env(safe-area-inset-top)); z-index: 9;
+  height: var(--doctabs-h); padding: 0 4px 0 8px;
+  display: flex; align-items: flex-end; gap: 2px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.doctab-list {
+  flex: 0 1 auto; min-width: 0; display: flex; align-items: flex-end; gap: 2px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.doctab-list::-webkit-scrollbar { display: none; }
+.doctabs > .icon-btn { align-self: center; flex: none; }
+.doctab {
+  flex: none; display: flex; align-items: center; max-width: 200px; height: 36px;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted);
+}
+.doctab:hover { background: var(--surface-2); }
+.doctab.active {
+  background: var(--bg); border-color: var(--border); color: var(--text); font-weight: 600;
+  margin-bottom: -1px; height: 37px;
+}
+.doctab-name {
+  min-width: 0; height: 100%; padding: 0 4px 0 12px; border: 0; background: transparent; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px;
+}
+.doctab-close {
+  flex: none; width: 28px; height: 28px; margin-right: 4px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1;
+}
+.doctab-close:hover { background: var(--border); color: var(--text); }
+
 /* ---------- ボタン ---------- */
 .btn {
   min-height: 40px; padding: 8px 14px; border-radius: 10px; cursor: pointer;
@@ -158,10 +191,10 @@ h3.sub { font-size: 14px; margin: 16px 0 6px; color: var(--muted); }
   }
   .pane { display: block !important; }
   #pane-data, #pane-right {
-    position: sticky; top: calc(var(--topbar-h) + 12px);
-    max-height: calc(100vh - var(--topbar-h) - 24px); overflow: auto;
+    position: sticky; top: calc(var(--topbar-h) + var(--doctabs-h) + 12px);
+    max-height: calc(100vh - var(--topbar-h) - var(--doctabs-h) - 24px); overflow: auto;
   }
-  #pane-graph { position: sticky; top: calc(var(--topbar-h) + 12px); }
+  #pane-graph { position: sticky; top: calc(var(--topbar-h) + var(--doctabs-h) + 12px); }
   .seg.rtabs { display: grid; margin-bottom: 10px; }
   #rtab-settings, #rtab-results { display: none !important; }
   body[data-rtab="settings"] #rtab-settings, body[data-rtab="results"] #rtab-results { display: block !important; }

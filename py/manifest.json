@@ -1,5 +1,5 @@
 {
- "version": "2.3.1-202610122341",
+ "version": "2.3.1-202610131200",
  "files": [
   "graphapp/__init__.py",
   "graphapp/model.py",

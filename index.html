@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=2.3.1-202610122341">
+<link rel="stylesheet" href="style.css?v=2.3.1-202610131200">
 </head>
 <body data-tab="graph" data-rtab="settings">
 
@@ -39,6 +39,14 @@
     </button>
   </div>
 </header>
+
+<!-- 開いているグラフのタブ -->
+<nav class="doctabs" aria-label="グラフの切り替え">
+  <div id="doc-tabs" class="doctab-list" role="tablist"></div>
+  <button id="btn-newdoc" class="icon-btn sm" title="新しいグラフ" aria-label="新しいグラフ">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+</nav>
 
 <main class="layout">
   <!-- ===== データ ===== -->
@@ -214,7 +222,10 @@
 <dialog id="dlg-menu" class="sheet">
   <form method="dialog">
     <h2>メニュー</h2>
-    <button class="menu-item" value="new">新しいプロジェクト</button>
+    <button class="menu-item" value="new">新しいグラフ (タブを追加)</button>
+    <button class="menu-item" value="dup">このグラフを複製</button>
+    <button class="menu-item" value="rename">このグラフの名前を変更</button>
+    <hr>
     <button class="menu-item" value="open">プロジェクトを開く (.gproj)</button>
     <button class="menu-item" value="save">プロジェクトを保存 (.gproj)</button>
     <hr>
@@ -336,6 +347,13 @@
         <li><b>取り込み</b> … CSV / TSV / TXT / Excel (xlsx) を読み込みます。ヘッダ行と誤差列は自動判定します。</li>
         <li><b>数式</b> … <code>np.sin(x)</code> のような数式からデータを作ります。</li>
       </ul>
+      <h3>複数のグラフ</h3>
+      <ul>
+        <li>画面上部のタブで、いくつかのグラフを同時に開いて切り替えられます。<b>＋</b> で新しいグラフを追加します (グラフ設定は今のグラフから引き継ぎます)。</li>
+        <li>選択中のタブをもう一度押すと名前を変更できます。名前は保存・書き出しのファイル名になります。</li>
+        <li>データ・グラフ設定・「元に戻す」の履歴はグラフごとに別々です。保存 (.gproj) と書き出しは選択中のグラフが対象です。</li>
+        <li>プロジェクトを開くと新しいタブで開きます (複数のファイルを選ぶとそれぞれ別のタブになります)。</li>
+      </ul>
       <h3>近似</h3>
       <ul>
         <li>非線形 (カスタム) は <code>a * exp(-b * x) + c</code> のように書きます。x 以外の名前 (a, b, c …) がフィットパラメータになります。</li>
@@ -345,7 +363,7 @@
       <ul>
         <li><b>プロジェクトを保存</b> … <code>.gproj</code> ファイルとして保存します。PC 版 (Windows) と同じ形式なので、PC と スマホ の間でそのまま開けます。</li>
         <li><b>画像を書き出し</b> … PNG / PDF / SVG / EPS / TIFF。図は「グラフ設定」の幅 × 高さ (cm) どおりの大きさになります。</li>
-        <li>作業中のプロジェクトはこのブラウザに自動で保存され、次に開いたときに復元されます。</li>
+        <li>作業中のグラフ (開いているタブすべて) はこのブラウザに自動で保存され、次に開いたときに復元されます。</li>
       </ul>
       <h3>ホーム画面に追加</h3>
       <p>iPhone は Safari の共有ボタン →「ホーム画面に追加」、Android は Chrome のメニュー →「ホーム画面に追加」で、アプリのように起動できます。一度読み込めばオフラインでも使えます (Excel の取り込みは初回のみ通信が必要)。</p>
@@ -355,10 +373,10 @@
   </form>
 </dialog>
 
-<input type="file" id="file-open" accept=".gproj,application/json" hidden>
+<input type="file" id="file-open" accept=".gproj,application/json" multiple hidden>
 <input type="file" id="file-import" accept=".csv,.tsv,.txt,.dat,.xlsx,.xlsm,.gproj,text/csv,text/plain" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<script src="app.js?v=2.3.1-202610122341"></script>
+<script src="app.js?v=2.3.1-202610131200"></script>
 </body>
 </html>
