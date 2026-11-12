@@ -19,12 +19,15 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import numpy as np  # noqa: E402
+from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib import font_manager, ticker  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.text import Text  # noqa: E402
 
 from .fitting import FitResult, compute_fit  # noqa: E402
 from .model import AUTO_MARKERS, GraphSettings, Project  # noqa: E402
+from .stats import valid_level  # noqa: E402
 from .texfmt import has_cjk, sci_tex  # noqa: E402
 
 CM = 1 / 2.54
@@ -106,20 +109,57 @@ def _fix_mixed_text(fig: Figure) -> None:
             t.set_fontfamily([CJK_FONT])
 
 
+def _band_color(color: str) -> tuple[float, float, float]:
+    """信頼帯の色: データの色を白で薄めた不透明色 (半透明は EPS で使えない)。"""
+    return tuple(c + (1.0 - c) * 0.85 for c in mcolors.to_rgb(color))
+
+
+def _draw_band(ax, ds, res: FitResult, xs):
+    """近似線のまわりの信頼帯 / 予測帯。描けなければ None。"""
+    kind = getattr(ds.fit, "band", "none")
+    if kind not in ("confidence", "prediction") or not res.parametric:
+        return None
+    half = res.interval(xs, kind)
+    if half is None and kind == "prediction":
+        half = res.interval(xs, "confidence")  # 重み付きの近似では予測区間を求められない
+    if half is None:
+        return None
+    y = res.evaluate(xs)
+    ok = np.isfinite(y) & np.isfinite(half)
+    if not ok.any():
+        return None
+    return ax.fill_between(xs, y - half, y + half, where=ok, color=_band_color(ds.color), linewidth=0, zorder=1)
+
+
+def _tick_step(axis, spec, lim) -> None:
+    """目盛りの間隔の指定 (対数軸と、目盛りが多くなりすぎる指定は無視する)。"""
+    step = float(getattr(spec, "step", 0) or 0)
+    if step > 0 and not spec.log and abs(lim[1] - lim[0]) / step <= 50:
+        axis.set_major_locator(ticker.MultipleLocator(step))
+
+
 def build_figure(project: Project) -> tuple[Figure, list[FitResult]]:
     setup_fonts()
     s = project.settings
     rc = style_rc(s)
-    results: list[FitResult] = []
+    level = valid_level(getattr(s, "conf_level", 0.95))
+    visible = [ds for ds in project.datasets if ds.visible]
+    fits = [compute_fit(ds, level) for ds in visible]
+    results: list[FitResult] = [r for r in fits if r is not None]
+    show_resid = bool(getattr(s, "residuals", False)) and any(r.parametric and r.resid.size for r in results)
     with matplotlib.rc_context(rc):
         fig = Figure(figsize=(max(s.width_cm, 2) * CM, max(s.height_cm, 2) * CM))
         fig._graphapp_rc = rc
-        ax = fig.subplots()
+        if show_resid:
+            # 下段に残差 (測定値 − 近似値)。横軸は上段と共通
+            ax, ax_r = fig.subplots(2, 1, sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+        else:
+            ax, ax_r = fig.subplots(), None
+        axes = [ax] if ax_r is None else [ax, ax_r]
 
         auto_i = 0
-        for ds in project.datasets:
-            if not ds.visible:
-                continue
+        extended = []  # 軸の範囲が決まってから端まで延ばす近似線
+        for ds, res in zip(visible, fits):
             marker = ds.marker
             if marker == "auto":
                 marker = AUTO_MARKERS[auto_i % len(AUTO_MARKERS)]
@@ -128,24 +168,31 @@ def build_figure(project: Project) -> tuple[Figure, list[FitResult]]:
             label = ds.name if s.data_legend else None
             show_marker = ds.style in ("points", "line_points")
             show_line = ds.style in ("line", "line_points")
+            face = ds.color if ds.filled else "white"
             if yerr is not None or xerr is not None:
                 ax.errorbar(x, y, yerr=yerr, xerr=xerr, fmt="none", ecolor=ds.color,
                             elinewidth=0.8, capthick=0.8, zorder=1.5)
             ax.plot(x, y, color=ds.color, label=label, zorder=2,
                     linestyle="-" if show_line else "none", linewidth=ds.line_width,
                     marker=marker if show_marker else None, markersize=ds.marker_size,
-                    markerfacecolor=ds.color if ds.filled else "white",
-                    markeredgecolor=ds.color, markeredgewidth=0.8)
+                    markerfacecolor=face, markeredgecolor=ds.color, markeredgewidth=0.8)
 
-            res = compute_fit(ds)
-            if res is None:
+            if res is None or not res.ok:
                 continue
-            results.append(res)
-            if res.ok:
-                ax.plot(res.x_fit, res.y_fit, color=ds.color, linestyle="--",
-                        linewidth=max(ds.line_width * 0.8, 0.5), label=res.label, zorder=2.5)
+            (line,) = ax.plot(res.x_fit, res.y_fit, color=ds.color, linestyle="--",
+                              linewidth=max(ds.line_width * 0.8, 0.5), label=res.label, zorder=2.5)
+            band = _draw_band(ax, ds, res, res.x_fit)
+            if res.parametric and getattr(ds.fit, "extend", False):
+                extended.append((ds, res, line, band))
+            if ax_r is not None and res.parametric and res.resid.size:
+                if res.resid_err is not None:
+                    ax_r.errorbar(res.x_data, res.resid, yerr=res.resid_err, fmt="none", ecolor=ds.color,
+                                  elinewidth=0.8, capthick=0.8, zorder=1.5)
+                ax_r.plot(res.x_data, res.resid, linestyle="none", zorder=2,
+                          marker=marker if show_marker else "o", markersize=ds.marker_size * 0.8,
+                          markerfacecolor=face, markeredgecolor=ds.color, markeredgewidth=0.8)
 
-        ax.set_xlabel(s.xlabel)
+        axes[-1].set_xlabel(s.xlabel)
         ax.set_ylabel(s.ylabel)
 
         if s.x_axis.log:
@@ -157,18 +204,41 @@ def build_figure(project: Project) -> tuple[Figure, list[FitResult]]:
         if not s.y_axis.auto and s.y_axis.min != s.y_axis.max:
             ax.set_ylim(s.y_axis.min, s.y_axis.max)
 
-        if s.grid:
-            # 半透明は EPS で使えないため、不透明な薄い灰色にする
-            ax.grid(True, linestyle=":", linewidth=0.5, color="0.6")
+        xlim, ylim = ax.get_xlim(), ax.get_ylim()
+        if extended:
+            # 延長した線で表示範囲が変わらないよう、範囲を固定してから描き直す
+            lo, hi = sorted(xlim)
+            xs = np.geomspace(lo, hi, 400) if s.x_axis.log and lo > 0 else np.linspace(lo, hi, 400)
+            for ds, res, line, band in extended:
+                line.set_data(xs, res.evaluate(xs))
+                if band is not None:
+                    band.remove()
+                    _draw_band(ax, ds, res, xs)
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+        _tick_step(ax.xaxis, s.x_axis, xlim)
+        _tick_step(ax.yaxis, s.y_axis, ylim)
 
-        ax.tick_params(direction="in", top=True, right=True, labeltop=False, labelright=False)
-        ax.minorticks_on()
-        ax.tick_params(which="minor", direction="in", top=True, right=True)
+        if ax_r is not None:
+            ax_r.axhline(0.0, color="black", linewidth=0.8, zorder=1)
+            ax_r.set_ylabel(getattr(s, "residual_label", "残差"))
+            m = max(abs(v) for v in ax_r.get_ylim()) * 1.1
+            ax_r.set_ylim(-m, m)  # 0 を中心に上下対称
+            ax_r.yaxis.set_major_locator(ticker.MaxNLocator(nbins=3, symmetric=True))
+
+        for a in axes:
+            if s.grid:
+                # 半透明は EPS で使えないため、不透明な薄い灰色にする
+                a.grid(True, linestyle=":", linewidth=0.5, color="0.6")
+            a.tick_params(direction="in", top=True, right=True, labeltop=False, labelright=False)
+            a.minorticks_on()
+            a.tick_params(which="minor", direction="in", top=True, right=True)
 
         if s.sci_notation:
-            xs, ys = int(s.x_sig_figs), int(s.y_sig_figs)
-            ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, p: f"${sci_tex(v, xs)}$"))
-            ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, p: f"${sci_tex(v, ys)}$"))
+            xs_, ys_ = int(s.x_sig_figs), int(s.y_sig_figs)
+            ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, p: f"${sci_tex(v, xs_)}$"))
+            for a in axes:
+                a.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, p: f"${sci_tex(v, ys_)}$"))
 
         if s.legend:
             handles, _ = ax.get_legend_handles_labels()
@@ -188,7 +258,9 @@ def build_figure(project: Project) -> tuple[Figure, list[FitResult]]:
         _fix_mixed_text(fig)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            fig.tight_layout(pad=0.3, rect=[0, bottom, 1, 1])
+            fig.tight_layout(pad=0.3, h_pad=0.5, rect=[0, bottom, 1, 1])
+            if ax_r is not None:
+                fig.align_ylabels(axes)
     return fig, results
 
 

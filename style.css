@@ -249,6 +249,8 @@ legend { font-weight: 600; padding: 0 4px; font-size: 14px; }
 .col { display: flex; flex-direction: column; gap: 4px; padding: 5px 0; }
 .pair { display: flex; align-items: center; gap: 6px; max-width: 65%; }
 .pair input, .pair select { min-width: 0; }
+.pair.wide { max-width: none; }
+.pair.wide input { flex: 1; }
 .status { margin: 2px 0 4px; font-size: 13px; min-height: 1em; }
 .status.ok { color: var(--ok); }
 .status.err, .err { color: var(--danger); }
@@ -317,3 +319,47 @@ dialog hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   max-width: calc(100vw - 32px); box-shadow: 0 4px 16px rgba(0,0,0,.3);
 }
 @media (min-width: 900px) { .toast { bottom: 24px; } }
+
+/* ---------- 結果 (近似・統計) ---------- */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 10px; }
+.fit-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.fit-head b { overflow-wrap: anywhere; }
+.tag { font-size: 12px; color: var(--muted); background: var(--surface-2); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+.fit-eq { font-family: ui-monospace, Consolas, monospace; font-size: 13px; margin: 4px 0 6px; overflow-wrap: anywhere; }
+.fit-card .table-wrap { margin-top: 4px; }
+.fit-stats { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 6px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fit-stats b { color: var(--text); font-weight: 600; }
+.fit-fail { color: var(--danger); font-size: 14px; margin: 4px 0; }
+.calc-out { margin: 2px 0 8px; font-size: 14px; font-variant-numeric: tabular-nums; min-height: 1.4em; white-space: pre-line; overflow-wrap: anywhere; }
+.calc-out.err { color: var(--danger); }
+.plain-list { list-style: none; margin: 6px 0; padding: 0; font-size: 13px; color: var(--muted); }
+.plain-list li { margin: 2px 0; }
+
+/* 色の候補・記号の入力 */
+.swatches { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; padding: 0 0 6px; }
+.swatches button { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid rgba(128, 128, 128, .6); cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
+.chip {
+  min-width: 34px; min-height: 30px; padding: 2px 9px; border: 1px solid var(--border); border-radius: 15px;
+  background: var(--surface); font-size: 13px; cursor: pointer;
+}
+.chip:hover { background: var(--surface-2); }
+
+/* 非線形近似の初期値 */
+.p0-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.p0-grid label { display: flex; align-items: center; gap: 6px; }
+.p0-grid label span { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+
+/* プレビュー上の座標 */
+.preview img { touch-action: pan-y; }
+.coord {
+  position: absolute; left: 8px; bottom: 8px; padding: 2px 8px; border-radius: 6px; pointer-events: none;
+  font-size: 12px; font-variant-numeric: tabular-nums; background: rgba(34, 43, 54, .85); color: #fff;
+}
+
+/* タブの並べ替え (ドラッグ) */
+.doctab.dragging { opacity: .45; }
+.doctab.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+.doctab.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+.menu-item:disabled { opacity: .4; cursor: default; }
+.menu-item:disabled:hover { background: transparent; }

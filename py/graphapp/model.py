@@ -15,10 +15,34 @@ import numpy as np
 FIT_KINDS = [
     ("なし", "none"),
     ("線形近似 (y=ax+b)", "linear"),
+    ("比例 (y=ax)", "proportional"),
+    ("多項式", "poly"),
+    ("指数 (y=a·exp(bx))", "exp"),
+    ("累乗 (y=a·x^b)", "power"),
+    ("対数 (y=a·ln x+b)", "log"),
     ("非線形 (カスタム)", "custom"),
     ("Savitzky-Golay", "savgol"),
 ]
 FIT_KIND_LABELS = {key: label for label, key in FIT_KINDS}
+
+# 非線形 (カスタム) でよく使う式。パラメータの初期値はデータから自動で見積もる (fitting.guess_p0)
+FIT_TEMPLATES = [
+    ("指数減衰  A·exp(−k·x) + y0", "A * exp(-k * x) + y0"),
+    ("飽和曲線  A·(1 − exp(−k·x)) + y0", "A * (1 - exp(-k * x)) + y0"),
+    ("ガウス関数 (ピーク)", "A * exp(-(x - x0)**2 / (2 * w**2)) + y0"),
+    ("ローレンツ関数 (ピーク)", "A * w**2 / ((x - x0)**2 + w**2) + y0"),
+    ("シグモイド (ロジスティック)", "A / (1 + exp(-k * (x - x0))) + y0"),
+    ("ミカエリス・メンテン  Vmax·x / (Km + x)", "Vmax * x / (Km + x)"),
+    ("アレニウス型  A·exp(−B / x)", "A * exp(-B / x)"),
+    ("反比例  a / x + b", "a / x + b"),
+    ("正弦波  A·sin(w·x + p) + y0", "A * sin(w * x + p) + y0"),
+]
+
+# 近似線のまわりに描く帯
+FIT_BANDS = [("なし", "none"), ("信頼区間 (近似線の幅)", "confidence"), ("予測区間 (測定値の幅)", "prediction")]
+
+# 信頼水準 (パラメータの信頼区間・信頼帯に使う)
+CONF_LEVELS = [("68.3 % (1σ 相当)", 0.683), ("90 %", 0.90), ("95 %", 0.95), ("99 %", 0.99)]
 
 STYLES = [("点 (マーカー)", "points"), ("線", "line"), ("線 + 点", "line_points")]
 
@@ -76,6 +100,12 @@ class FitSpec:
     window_length: int = 5
     polyorder: int = 2
     weighted: bool = False  # Y 誤差で重み付け (誤差の逆数を重みにする)
+    degree: int = 2         # 多項式の次数
+    p0: dict = field(default_factory=dict)  # 非線形 (カスタム) の初期値 {パラメータ名: 値}。無いものは 1
+    band: str = "none"      # 信頼帯 (FIT_BANDS)
+    extend: bool = False    # 近似線をグラフの端まで延長する
+    x_min: float | None = None  # 近似に使う X の範囲 (None なら制限なし)
+    x_max: float | None = None
 
 
 @dataclass
@@ -151,6 +181,7 @@ class AxisSpec:
     min: float = 0.0
     max: float = 1.0
     log: bool = False
+    step: float = 0.0  # 目盛りの間隔 (0 なら自動)
 
 
 @dataclass
@@ -171,6 +202,9 @@ class GraphSettings:
     font_size: float = 10.0
     width_cm: float = 12.0
     height_cm: float = 9.0
+    conf_level: float = 0.95      # 信頼水準 (パラメータの信頼区間・信頼帯)
+    residuals: bool = False       # 近似の残差 (測定値 − 近似値) をグラフの下に表示する
+    residual_label: str = "残差"
     x_axis: AxisSpec = field(default_factory=AxisSpec)
     y_axis: AxisSpec = field(default_factory=AxisSpec)
 

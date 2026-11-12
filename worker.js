@@ -83,6 +83,10 @@ const handlers = {
   },
   importColumns: (args) => JSON.parse(api.import_columns(JSON.stringify(args))),
   parsePaste: ({ text }) => JSON.parse(api.parse_paste(text)),
+  predict: (args) => JSON.parse(api.predict(JSON.stringify(args))),
+  guessP0: (args) => JSON.parse(api.guess_p0(JSON.stringify(args))),
+  transform: (args) => JSON.parse(api.transform(JSON.stringify(args))),
+  ttest: (args) => JSON.parse(api.ttest(JSON.stringify(args))),
 };
 
 ready = boot();

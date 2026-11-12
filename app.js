@@ -13,7 +13,7 @@ const MERGE_MS = 1500;      // 同じ項目の連続入力は 1 回の「元に�
 /* ======================================================================
  * Worker (Python) との通信
  * ==================================================================== */
-const worker = new Worker("worker.js?v=2.3.1-202610131200");
+const worker = new Worker("worker.js?v=2.4.0-202611121200");
 let rpcSeq = 0;
 const pending = new Map();
 worker.onmessage = (ev) => {
@@ -45,12 +45,13 @@ const state = {
   defaults: null,
   docs: [],           // 開いているグラフ (タブ) ごとの状態。編集中のものは下の項目に展開してある
   active: 0,
+  closed: [],         // 閉じたグラフ (メニューから復元できる。新しいものが後ろ)
   project: null,
   selectedId: null,
   undo: [], redo: [],
   lastKey: null, lastTime: 0,
-  results: [], messages: [],
-  xlim: null, ylim: null,
+  results: [], messages: [], stats: [],
+  xlim: null, ylim: null, axes: null,
   showAllRows: false,
   fileName: "graph.gproj",
   previewSrc: null,
@@ -74,6 +75,39 @@ function fmtNum(v) {
 function fmtG(v, n = 6) {
   if (v === null || v === undefined || !Number.isFinite(v)) return "";
   return String(Number(v.toPrecision(n)));
+}
+function fmtP(p) {   // p 値 ("p = 0.012" / "p < 0.0001")
+  if (p === null || p === undefined) return "";
+  return p < 1e-4 ? "p < 0.0001" : `p = ${fmtG(p, 3)}`;
+}
+const SUPERSCRIPT = { "-": "⁻", 0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹" };
+const sup = (n) => String(n).replace(/[-0-9]/g, (c) => SUPERSCRIPT[c]);
+const fmtPct = (level) => `${fmtG(level * 100, 3)} %`;
+function fmtPM(v, err) {
+  // 値と誤差を、誤差の有効数字 2 桁の位にそろえる。 [値, 誤差] の文字列を返す (例: ["6.93", "0.12"])
+  if (v === null || v === undefined || !Number.isFinite(v)) return ["", ""];
+  if (err === null || err === undefined || !(err > 0) || !Number.isFinite(err)) return [fmtG(v, 6), ""];
+  const exp = Math.floor(Math.log10(err));   // 誤差の最上位の位
+  const big = Math.max(Math.abs(v), err);
+  if (big >= 1e-4 && big < 1e6) {
+    const dec = Math.min(Math.max(1 - exp, 0), 12);
+    return [v.toFixed(dec), err.toFixed(dec)];
+  }
+  const e10 = Math.floor(Math.log10(big));   // 共通の指数でくくる
+  const dec = Math.min(Math.max(e10 - exp + 1, 0), 12);
+  const tail = `×10${sup(e10)}`;
+  return [(v / 10 ** e10).toFixed(dec) + tail, (err / 10 ** e10).toFixed(dec) + tail];
+}
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const safeName = (name) => (String(name).trim().replace(/[\\/:*?"<>|]/g, "_") || "data");
+function csvBlob(rows) {   // Excel でそのまま開けるよう BOM 付き UTF-8
+  const cell = (c) => { const t = c === null || c === undefined ? "" : String(c); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  return new Blob(["\ufeff" + rows.map((r) => r.map(cell).join(",")).join("\r\n")], { type: "text/csv" });
 }
 function nPoints(ds) {
   let n = 0;
@@ -138,14 +172,21 @@ function updateUndoButtons() {
   $("btn-redo").disabled = !state.redo.length;
 }
 
-let autosaveTimer = 0;
+let autosaveTimer = 0, autosaveWarned = false;
 function scheduleAutosave() {
   clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
     stashDoc();
     const docs = state.docs.map((d) => ({ project: d.project, name: d.fileName }));
-    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ docs, active: state.active })); }
-    catch (e) { /* 保存できない環境 (プライベートモード等) は無視 */ }
+    const save = (closed) => localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ docs, active: state.active, closed }));
+    try { save(state.closed); }
+    catch (e) {
+      try { save([]); }   // 容量が足りないときは、閉じたグラフを省いてもう一度
+      catch (e2) {
+        if (!autosaveWarned) toast("このブラウザに自動保存できませんでした。「プロジェクトを保存」でファイルに残してください。");
+        autosaveWarned = true;
+      }
+    }
   }, 400);
 }
 
@@ -165,7 +206,7 @@ function getPath(obj, path) {
  *  元に戻す履歴・選択中のデータセット・近似結果などはグラフごとに別々に持つ。
  * ==================================================================== */
 const DOC_KEYS = ["project", "fileName", "selectedId", "undo", "redo", "lastKey", "lastTime",
-  "results", "messages", "xlim", "ylim", "showAllRows", "previewSrc"];
+  "results", "messages", "stats", "xlim", "ylim", "axes", "showAllRows", "previewSrc"];
 let docSeq = 0;
 
 function makeDoc(project, fileName) {
@@ -173,7 +214,7 @@ function makeDoc(project, fileName) {
     uid: ++docSeq, project, fileName,
     selectedId: project.datasets.length ? project.datasets[0].id : null,
     undo: [], redo: [], lastKey: null, lastTime: 0,
-    results: [], messages: [], xlim: null, ylim: null, showAllRows: false, previewSrc: null,
+    results: [], messages: [], stats: [], xlim: null, ylim: null, axes: null, showAllRows: false, previewSrc: null,
   };
 }
 const curDoc = () => state.docs[state.active];
@@ -232,14 +273,38 @@ function duplicateDoc() {
 }
 
 function closeDoc(i) {
-  const d = i === state.active ? state : state.docs[i];
-  if (d.project.datasets.length
-      && !confirm(`「${docLabel(d)}」を閉じますか? 保存していない内容は失われます (元に戻せません)`)) return;
   stashDoc();
-  state.docs.splice(i, 1);
+  const [d] = state.docs.splice(i, 1);
+  if (d.project.datasets.length) {   // 中身のあるグラフは、間違えて閉じても戻せるようにとっておく
+    state.closed.push({ project: d.project, name: d.fileName });
+    if (state.closed.length > 5) state.closed.shift();
+    toast(`「${docLabel(d)}」を閉じました (メニューの「閉じたグラフを復元」で戻せます)`);
+  }
   if (!state.docs.length) state.docs.push(makeDoc(clone(state.defaults.project), "graph.gproj"));
   loadDoc(Math.min(i < state.active ? state.active - 1 : state.active, state.docs.length - 1));
   refreshAll();
+}
+
+async function reopenDoc() {
+  const c = state.closed[state.closed.length - 1];
+  if (!c) return;
+  const r = await rpc("normalize", { project: c.project });
+  if (!r.ok) { toast(r.error); return; }
+  const i = state.closed.indexOf(c);
+  if (i < 0) return;   // 待つ間に復元済み (二度押し)
+  state.closed.splice(i, 1);
+  openDoc(r.project, c.name);
+}
+
+function moveDoc(from, to) {
+  if (from === to || !state.docs[from] || !state.docs[to]) return;
+  stashDoc();
+  const cur = curDoc();
+  const [d] = state.docs.splice(from, 1);
+  state.docs.splice(to, 0, d);
+  state.active = state.docs.indexOf(cur);
+  renderTabs();
+  scheduleAutosave();
 }
 
 function renameDoc() {
@@ -251,6 +316,7 @@ function renameDoc() {
   scheduleAutosave();
 }
 
+let dragTab = -1;   // ドラッグ中のタブの番号
 function renderTabs() {
   stashDoc();
   const bar = $("doc-tabs");
@@ -259,6 +325,26 @@ function renderTabs() {
     const active = i === state.active;
     const tab = document.createElement("div");
     tab.className = "doctab" + (active ? " active" : "");
+    tab.draggable = state.docs.length > 1;   // ドラッグで並べ替え
+    tab.addEventListener("dragstart", (e) => {
+      dragTab = i;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", docLabel(d));
+      tab.classList.add("dragging");
+    });
+    tab.addEventListener("dragend", () => { dragTab = -1; renderTabs(); });
+    tab.addEventListener("dragover", (e) => {
+      if (dragTab < 0 || dragTab === i) return;
+      e.preventDefault();
+      tab.classList.add(dragTab < i ? "drop-after" : "drop-before");
+    });
+    tab.addEventListener("dragleave", () => tab.classList.remove("drop-before", "drop-after"));
+    tab.addEventListener("drop", (e) => {
+      if (dragTab < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      moveDoc(dragTab, i);
+    });
     const name = document.createElement("button");
     name.type = "button";
     name.className = "doctab-name";
@@ -313,10 +399,11 @@ function addDatasets(items, desc) {
 /* ======================================================================
  * データセット一覧
  * ==================================================================== */
-function fitLabel(kind) {
+function fitLabel(kind, degree) {
   if (kind === "none") return "";
   const f = state.defaults.fit_kinds.find((k) => k[1] === kind);
-  return f ? f[0].replace(/ \(.*\)$/, "") : kind;
+  const label = f ? f[0].replace(/ \(.*\)$/, "") : kind;
+  return kind === "poly" && degree ? `${degree} 次${label}` : label;
 }
 
 function renderList() {
@@ -340,7 +427,7 @@ function renderList() {
     name.textContent = ds.name;
     const meta = document.createElement("span");
     meta.className = "ds-meta";
-    const fl = fitLabel(ds.fit.kind);
+    const fl = fitLabel(ds.fit.kind, ds.fit.degree);
     meta.textContent = `${nPoints(ds)} 点` + (fl ? ` · ${fl}` : "");
     li.append(cb, sw, name, meta);
     li.addEventListener("click", () => select(ds.id));
@@ -498,8 +585,63 @@ function renderProps() {
   $("p-formula").checked = ds.fit.show_formula;
   $("p-weighted").checked = ds.fit.weighted;
   set("p-sig", ds.fit.sig_figs);
+  set("p-degree", ds.fit.degree);
+  set("p-xmin", ds.fit.x_min ?? "");
+  set("p-xmax", ds.fit.x_max ?? "");
+  $("p-band").value = ds.fit.band;
+  $("p-extend").checked = ds.fit.extend;
+  $("p-template").value = templateOf(ds.fit.equation);
   updatePropsAvailability();
   validateEq();
+}
+
+// 数式がテンプレート (空白の違いは無視) ならその式、そうでなければ ""
+const squeeze = (t) => String(t || "").replace(/\s+/g, "");
+function templateOf(equation) {
+  const t = state.defaults.fit_templates.find(([, expr]) => squeeze(expr) === squeeze(equation));
+  return t ? t[1] : "";
+}
+
+async function applyTemplate(expr) {
+  const ds = curDs();
+  if (!ds || !expr) return;
+  const doc = curDoc();
+  const r = await rpc("guessP0", { dataset: ds, equation: expr });
+  if (doc !== curDoc() || curDs() !== ds) { renderProps(); return; }   // 待つ間に別のグラフ・データに移った
+  const p0 = (r.ok && r.p0) || {};
+  commit("近似式のテンプレートを設定", (p) => {
+    const f = getDsIn(p, ds.id).fit;
+    f.equation = expr;
+    f.p0 = p0;
+  }, { refresh: "all" });
+  toast(Object.keys(p0).length ? "初期値をデータから推定しました" : "初期値を推定できませんでした (1 のままです)");
+}
+
+function renderP0(params) {
+  // 非線形 (カスタム) の初期値の入力欄。入力中の欄は作り直さない
+  const ds = curDs();
+  const box = $("p-p0");
+  $("p-p0-box").hidden = !ds || !params.length;
+  if (!ds || !params.length) { box.textContent = ""; box.dataset.key = ""; return; }
+  const key = `${ds.id}:${params.join(",")}`;
+  if (box.dataset.key !== key) {
+    box.textContent = "";
+    box.dataset.key = key;
+    for (const name of params) {
+      const lb = el("label");
+      const inp = el("input");
+      inp.type = "number"; inp.step = "any"; inp.inputMode = "decimal";
+      inp.dataset.p = name;
+      inp.setAttribute("aria-label", `${name} の初期値`);
+      lb.append(el("span", "", name), inp);
+      box.append(lb);
+    }
+  }
+  const p0 = ds.fit.p0 || {};
+  for (const inp of box.querySelectorAll("input")) {
+    if (document.activeElement !== inp) inp.value = fmtNum(Number(p0[inp.dataset.p] ?? 1));
+  }
+  $("p-p0-auto").hidden = !templateOf(ds.fit.equation);
 }
 
 function updatePropsAvailability() {
@@ -507,8 +649,10 @@ function updatePropsAvailability() {
   if (!ds) return;
   const kind = ds.fit.kind;
   const custom = kind === "custom", savgol = kind === "savgol", any = kind !== "none";
+  $("p-poly-box").hidden = kind !== "poly";
   $("p-custom-box").hidden = !custom;
   $("p-sg-box").hidden = !savgol;
+  $("p-param-box").hidden = !any || savgol;   // 式による近似だけの設定 (範囲・帯・延長)
   $("p-fitlabel").disabled = !any;
   $("p-r2").disabled = !any || savgol;
   $("p-formula").disabled = !any || savgol;
@@ -542,6 +686,7 @@ function validateEq() {
     st.textContent = r.ok ? `✔ パラメータ: ${r.params.join(", ")}` : `✖ ${r.error}`;
     st.className = "status " + (r.ok ? "ok" : "err");
     $("p-eq").classList.toggle("invalid", !r.ok);
+    renderP0(r.ok ? r.params : []);
   }, 250);
 }
 
@@ -553,14 +698,17 @@ function bindProp(id, path, kind, desc) {
     if (!ds) return;
     let v;
     if (kind === "check") v = el.checked;
+    else if (kind === "numnull") v = toNum(el.value);   // 空欄 = 指定なし
     else if (kind === "num" || kind === "int") {
       v = toNum(el.value);
       if (v === null) return;
       if (kind === "int") v = Math.round(v);
+      if (path === "fit.degree") v = Math.max(1, Math.min(state.defaults.max_poly_degree, v));
     } else v = el.value;
     commit(desc, (p) => { setPath(getDsIn(p, ds.id), path, v); },
-      { mergeKey: kind === "text" || kind === "num" || kind === "int" || kind === "color" ? `ds:${ds.id}:${path}` : null });
+      { mergeKey: kind === "check" || kind === "select" ? null : `ds:${ds.id}:${path}` });
     if (path === "name") renderList();
+    if (path === "fit.equation") $("p-template").value = templateOf(v);
     updatePropsAvailability();
     if (path === "fit.equation" || path === "fit.kind") validateEq();
   });
@@ -586,10 +734,17 @@ function renderSettings() {
   $("s-legloc").value = s.legend_loc;
   $("s-legframe").checked = s.legend_frame;
   $("s-grid").checked = s.grid;
+  $("s-conf").value = String(s.conf_level);
+  $("s-resid").checked = s.residuals;
+  set("s-residlabel", s.residual_label);
+  $("s-residlabel").disabled = !s.residuals;
   for (const fs of document.querySelectorAll("fieldset[data-axis]")) {
     const ax = s[fs.dataset.axis];
     fs.querySelector('[data-k="auto"]').checked = ax.auto;
     fs.querySelector('[data-k="log"]').checked = ax.log;
+    const step = fs.querySelector('[data-k="step"]');
+    step.disabled = ax.log;
+    if (document.activeElement !== step) step.value = ax.step > 0 ? fmtNum(ax.step) : "";
     for (const k of ["min", "max"]) {
       const el = fs.querySelector(`[data-k="${k}"]`);
       el.disabled = ax.auto;
@@ -620,17 +775,17 @@ function syncPreset() {
 
 function bindSetting(id, path, kind, desc) {
   const el = $(id);
-  const ev = kind === "check" || kind === "select" ? "change" : "input";
-  el.addEventListener(ev, () => {
+  const choice = kind === "check" || kind === "select" || kind === "selnum";
+  el.addEventListener(choice ? "change" : "input", () => {
     let v;
     if (kind === "check") v = el.checked;
+    else if (kind === "selnum") v = Number(el.value);
     else if (kind === "num" || kind === "int") {
       v = toNum(el.value);
       if (v === null) return;
       if (kind === "int") v = Math.max(1, Math.round(v));
     } else v = el.value;
-    commit(desc, (p) => { setPath(p.settings, path, v); },
-      { mergeKey: kind === "check" || kind === "select" ? null : `set:${path}` });
+    commit(desc, (p) => { setPath(p.settings, path, v); }, { mergeKey: choice ? null : `set:${path}` });
     renderSettings();
   });
 }
@@ -638,7 +793,7 @@ function bindSetting(id, path, kind, desc) {
 /* ======================================================================
  * プレビュー描画
  * ==================================================================== */
-let renderTimer = 0, rendering = false, renderAgain = false;
+let renderTimer = 0, rendering = false, renderAgain = false, lastPreviewW = 0;
 function scheduleRender(delay = 120) {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(doRender, delay);
@@ -647,8 +802,11 @@ async function doRender() {
   if (!state.ready) return;
   if (rendering) { renderAgain = true; return; }
   const box = $("preview");
-  const cssW = box.clientWidth;
-  if (cssW < 10) { renderAgain = false; state.needsRender = true; return; }   // 非表示中 (スマホで別タブ)
+  let cssW = box.clientWidth;
+  if (cssW < 10) {   // プレビューが非表示 (スマホで別のタブ)
+    if (document.body.dataset.tab !== "results") { renderAgain = false; state.needsRender = true; return; }
+    cssW = lastPreviewW || Math.max(240, window.innerWidth - 44);   // 結果タブでは近似結果・統計が要るので描く
+  } else lastPreviewW = cssW;
   state.needsRender = false;
   const s = state.project.settings;
   const dpr = window.devicePixelRatio || 1;
@@ -668,12 +826,13 @@ async function doRender() {
       $("preview-empty").hidden = false;
       $("preview-empty").textContent = state.project.datasets.length
         ? "表示するデータがありません (すべて非表示です)" : "データを追加するとここにグラフが表示されます";
-      state.results = []; state.xlim = state.ylim = null; state.previewSrc = null;
+      state.results = []; state.stats = []; state.xlim = state.ylim = state.axes = null; state.previewSrc = null;
     } else {
       state.previewSrc = img.src = "data:image/png;base64," + r.image;
       img.hidden = false;
       $("preview-empty").hidden = true;
-      state.results = r.results; state.xlim = r.xlim; state.ylim = r.ylim;
+      state.results = r.results; state.stats = r.stats || [];
+      state.xlim = r.xlim; state.ylim = r.ylim; state.axes = r.axes || null;
     }
     state.messages = r.messages || [];
     renderResults();
@@ -689,37 +848,197 @@ async function doRender() {
   }
 }
 
+function showCoord(e) {
+  // ポインタの位置のグラフ上の座標 (描画時に受け取ったグラフ領域と軸の範囲から換算する)
+  const a = state.axes, out = $("preview-coord"), img = $("preview-img");
+  if (!a || !state.xlim || !state.ylim || img.hidden) { out.hidden = true; return; }
+  const rc = img.getBoundingClientRect();
+  const [x0, y0, x1, y1] = a.box;
+  const u = ((e.clientX - rc.left) / rc.width - x0) / (x1 - x0);
+  const v = (1 - (e.clientY - rc.top) / rc.height - y0) / (y1 - y0);
+  if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) { out.hidden = true; return; }
+  const at = ([lo, hi], t, log) => {
+    if (log) return fmtG(10 ** (Math.log10(lo) + t * (Math.log10(hi) - Math.log10(lo))), 3);
+    const q = 10 ** Math.floor(Math.log10(Math.abs(hi - lo) / 500));   // 表示幅の 1/500 程度に丸める
+    return fmtG(Math.round((lo + t * (hi - lo)) / q) * q, 6);
+  };
+  out.textContent = `x = ${at(state.xlim, u, a.xlog)}　y = ${at(state.ylim, v, a.ylog)}`;
+  out.hidden = false;
+}
+
 /* ======================================================================
- * 近似結果
+ * 近似結果・統計
  * ==================================================================== */
 function renderResults() {
-  const tbody = $("res-table").tBodies[0];
-  tbody.textContent = "";
+  const box = $("fit-cards");
+  box.textContent = "";
   for (const r of state.results) {
-    const kind = fitLabel(r.kind) || r.kind;
-    const rows = r.ok ? r.params.map((p, i) => [i ? "" : r.name, i ? "" : kind, p.name, fmtG(p.value),
-      fmtG(p.err), i ? "" : fmtG(r.r2)]) : [[r.name, kind, "(失敗)", r.message, "", ""]];
-    for (const cells of rows) {
-      const tr = document.createElement("tr");
-      for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.append(td); }
-      tbody.append(tr);
+    const card = el("div", "card fit-card");
+    const head = el("div", "fit-head");
+    head.append(el("b", "", r.name), el("span", "tag", fitKindText(r)));
+    if (r.weighted) head.append(el("span", "tag", "Y 誤差で重み付け"));
+    card.append(head);
+    if (!r.ok) {
+      card.append(el("p", "fit-fail", r.message || "近似できませんでした"));
+      box.append(card);
+      continue;
     }
+    card.append(el("div", "fit-eq", r.equation));
+    const withErr = r.params.some((p) => p.err !== null), withCi = r.params.some((p) => p.ci !== null);
+    const table = el("table", "res-table");
+    const hr = table.createTHead().insertRow();
+    for (const h of ["パラメータ", "値", ...(withErr ? ["標準誤差"] : []), ...(withCi ? [`${fmtPct(r.level)} 信頼区間`] : [])]) hr.append(el("th", "", h));
+    const tb = table.createTBody();
+    for (const p of r.params) {
+      const [v, e] = fmtPM(p.value, p.err);
+      const tr = tb.insertRow();
+      tr.append(el("td", "", p.name), el("td", "", v));
+      if (withErr) tr.append(el("td", "", e));
+      if (withCi) tr.append(el("td", "", p.ci === null ? "" : `± ${fmtPM(p.value, p.ci)[1]}`));
+    }
+    const wrap = el("div", "table-wrap");
+    wrap.append(table);
+    card.append(wrap);
+    if (r.parametric) {
+      const st = el("div", "fit-stats");
+      const item = (label, text) => { if (text === "") return; const sp = el("span", "", `${label} = `); sp.append(el("b", "", text)); st.append(sp); };
+      item("R²", fmtG(r.r2, 5));
+      item("補正 R²", fmtG(r.r2_adj, 5));
+      item("残差の標準偏差", fmtG(r.resid_sd, 4));
+      item("χ²/自由度", fmtG(r.chi2_red, 4));
+      item("点数", `${r.n}` + (r.dof !== null ? ` (自由度 ${r.dof})` : ""));
+      card.append(st);
+    }
+    box.append(card);
   }
   $("res-empty").hidden = state.results.length > 0;
+
+  // 基本統計量
+  const stb = $("stat-table").tBodies[0], extra = $("stat-extra");
+  stb.textContent = "";
+  extra.textContent = "";
+  for (const s of state.stats) {
+    for (const [k, label] of [["x", "X"], ["y", "Y"]]) {
+      const d = s[k], tr = stb.insertRow();
+      for (const c of [k === "x" ? s.name : "", label, d.n, fmtG(d.mean), fmtG(d.sd), fmtG(d.se), fmtG(d.median), fmtG(d.min), fmtG(d.max)]) tr.append(el("td", "", String(c)));
+    }
+    const parts = [];
+    if (s.r !== null) parts.push(`相関係数 r = ${fmtG(s.r, 5)}` + (s.r_p !== null ? ` (${fmtP(s.r_p)})` : ""));
+    if (s.area !== null) parts.push(`面積 ∫y dx = ${fmtG(s.area, 6)}`);
+    if (parts.length) extra.append(el("li", "", `${s.name}: ${parts.join("、")}`));
+  }
+  $("stat-empty").hidden = state.stats.length > 0;
+
   const ul = $("msg-list");
   ul.textContent = "";
-  for (const m of state.messages) { const li = document.createElement("li"); li.textContent = m; ul.append(li); }
+  for (const m of state.messages) ul.append(el("li", "", m));
   for (const id of ["msg-badge", "msg-badge2"]) {
     $(id).hidden = !state.messages.length;
     $(id).textContent = state.messages.length;
   }
   $("graph-msg").textContent = state.messages.length ? `⚠ ${state.messages[0]}` : "";
+  syncCalc();
+  syncTtest();
+}
+const fitKindText = (r) => fitLabel(r.kind, r.kind === "poly" && r.ok ? r.params.length - 1 : 0) || r.kind;
+
+function resultsRows() {
+  // コピー・CSV 保存用の表 (数値は丸めすぎない)
+  const num = (v) => (v === null || v === undefined ? "" : fmtG(v, 10));
+  const level = state.results.length ? state.results[0].level : state.project.settings.conf_level;
+  const rows = [["データ", "近似", "パラメータ", "値", "標準誤差", `${fmtPct(level)} 信頼区間 (±)`, "R²", "補正 R²",
+    "残差の標準偏差", "点数", "自由度", "χ²/自由度"]];
+  for (const r of state.results) {
+    if (!r.ok) { rows.push([r.name, fitKindText(r), "(失敗)", r.message]); continue; }
+    r.params.forEach((p, i) => rows.push([i ? "" : r.name, i ? "" : fitKindText(r), p.name, num(p.value), num(p.err), num(p.ci),
+      ...(i ? [] : [num(r.r2), num(r.r2_adj), num(r.resid_sd), r.n, r.dof ?? "", num(r.chi2_red)])]));
+  }
+  if (state.stats.length) {
+    rows.push([], ["データ", "列", "点数", "平均", "標準偏差", "標準誤差", "中央値", "最小", "最大", "相関係数 r", "面積 ∫y dx"]);
+    for (const s of state.stats) {
+      for (const k of ["x", "y"]) {
+        const d = s[k];
+        rows.push([k === "x" ? s.name : "", k.toUpperCase(), d.n, num(d.mean), num(d.sd), num(d.se), num(d.median), num(d.min), num(d.max),
+          ...(k === "x" ? [num(s.r), num(s.area)] : [])]);
+      }
+    }
+  }
+  return rows;
+}
+const resultsTsv = () => resultsRows().map((r) => r.join("\t")).join("\n");
+
+/* ---------- 近似式で計算 (x → y の予測、y → x の逆算) ---------- */
+let calcTimer = 0, calcSeq = 0;
+function syncCalc() {
+  const fits = state.results.filter((r) => r.ok && r.parametric);
+  $("calc-box").hidden = !fits.length;
+  const sel = $("calc-ds"), prev = sel.value;
+  fillSelect(sel, fits.map((r) => [`${r.name} (${fitKindText(r)})`, String(r.dataset_id)]));
+  if (fits.some((r) => String(r.dataset_id) === prev)) sel.value = prev;
+  scheduleCalc(0);
+}
+function scheduleCalc(delay = 250) {
+  clearTimeout(calcTimer);
+  calcTimer = setTimeout(runCalc, delay);
+}
+async function runCalc() {
+  const ds = getDs(Number($("calc-ds").value));
+  const x = toNum($("calc-x").value), y = toNum($("calc-y").value), yErr = toNum($("calc-yerr").value);
+  const outY = $("calc-y-out"), outX = $("calc-x-out");
+  const seq = ++calcSeq;
+  outY.className = outX.className = "calc-out";
+  if (!ds || $("calc-box").hidden || (x === null && y === null)) { outY.textContent = outX.textContent = ""; return; }
+  const r = await rpc("predict", { dataset: ds, level: state.project.settings.conf_level, x, y, y_err: yErr });
+  if (seq !== calcSeq) return;
+  if (!r.ok) {
+    outY.textContent = x === null ? "" : r.error;
+    outX.textContent = y === null ? "" : r.error;
+    outY.className = outX.className = "calc-out err";
+    return;
+  }
+  const pct = fmtPct(r.level);
+  const pm = (v, se, ci) => {
+    const [a, b] = fmtPM(v, se);
+    return b ? `${a} ± ${b}` + (ci !== null ? ` (${pct} 信頼区間 ±${fmtPM(v, ci)[1]})` : "") : a;
+  };
+  const p = r.predict;
+  if (!p) outY.textContent = "";
+  else if (p.y === null) outY.textContent = "この x では値を計算できません。";
+  else outY.textContent = `y = ${pm(p.y, p.se, p.ci)}` + (p.pi !== null ? `\n新しい測定値が入る範囲 (予測区間): ±${fmtPM(p.y, p.pi)[1]}` : "");
+  if (!r.solve) outX.textContent = "";
+  else if (!r.solve.length) outX.textContent = "この y になる x は、データの範囲とその前後には見つかりませんでした。";
+  else outX.textContent = r.solve.map((q) => `x = ${pm(q.x, q.se, q.ci)}` + (q.extrapolated ? "  ※ データの範囲の外 (外挿)" : "")).join("\n");
 }
 
-function resultsTsv() {
-  const lines = [["データ", "近似", "パラメータ", "値", "標準誤差", "R²"].join("\t")];
-  for (const tr of $("res-table").tBodies[0].rows) lines.push([...tr.cells].map((td) => td.textContent).join("\t"));
-  return lines.join("\n");
+/* ---------- 平均の比較 (t 検定) ---------- */
+let ttSeq = 0;
+function syncTtest() {
+  const list = state.project.datasets;
+  $("tt-box").hidden = list.length < 2;
+  if (list.length < 2) return;
+  const opts = list.map((d) => [d.name, String(d.id)]);
+  for (const [id, fallback] of [["tt-a", 0], ["tt-b", 1]]) {
+    const sel = $(id), prev = sel.value;
+    fillSelect(sel, opts);
+    sel.value = list.some((d) => String(d.id) === prev) ? prev : String(list[fallback].id);
+  }
+  runTtest();
+}
+async function runTtest() {
+  const a = getDs(Number($("tt-a").value)), b = getDs(Number($("tt-b").value));
+  const out = $("tt-out"), col = $("tt-col").value, paired = $("tt-paired").checked;
+  const seq = ++ttSeq;
+  out.className = "calc-out";
+  if (!a || !b || a === b) { out.textContent = a && a === b ? "別々のデータを選んでください。" : ""; return; }
+  const r = await rpc("ttest", { a: a[col], b: b[col], paired, level: state.project.settings.conf_level });
+  if (seq !== ttSeq) return;
+  if (!r.ok) { out.textContent = r.error; out.className = "calc-out err"; return; }
+  const [d, se] = fmtPM(r.diff, r.se);
+  const alpha = fmtG((1 - r.level) * 100, 3);
+  out.textContent = `平均: ${a.name} = ${fmtG(r.mean_a)} (${r.n_a} 点)、${b.name} = ${fmtG(r.mean_b)} (${r.n_b} 点)\n`
+    + `差 = ${d} ± ${se} (${fmtPct(r.level)} 信頼区間 ${fmtG(r.diff - r.ci, 4)} 〜 ${fmtG(r.diff + r.ci, 4)})\n`
+    + `t = ${fmtG(r.t, 4)}、自由度 = ${fmtG(r.df, 4)}、${fmtP(r.p)} (${r.paired ? "対応のある t 検定" : "Welch の t 検定"})\n`
+    + `→ 有意水準 ${alpha} % で、平均に差が${r.p < 1 - r.level ? "あるといえます" : "あるとはいえません"}。`;
 }
 
 /* ======================================================================
@@ -771,6 +1090,7 @@ function wipeLocalData() {
   clearTimeout(autosaveTimer);
   try { localStorage.removeItem(AUTOSAVE_KEY); localStorage.removeItem(EXPORT_KEY); } catch (e) { /* 無視 */ }
   state.docs = [makeDoc(clone(state.defaults.project), "graph.gproj")];
+  state.closed = [];
   loadDoc(0);
   refreshAll();
   clearTimeout(autosaveTimer);
@@ -997,6 +1317,110 @@ async function applyText(mode) {
   }, { refresh: "all" });
 }
 
+/* ---------- データの加工 ---------- */
+const OPS_DESC = {
+  expr: "X と Y を式で計算し直します。直線になる形に変換して近似するときなどに使います。",
+  sort: "X の小さい順に並べ替えます。",
+  mean: "同じ X の点を 1 点にまとめ、Y の平均をとります (繰り返し測定の整理)。",
+  diff: "となり合う点から傾き dy/dx を求めます (滴定曲線の当量点を探すときなど)。",
+  integ: "台形則で、最初の点からの面積を積み上げます。",
+  norm: "Y の値を基準の値で割って、比べやすくします。",
+  crop: "指定した範囲の外にある点を取り除きます。",
+  swap: "X と Y (と誤差) を入れ替えます。",
+};
+function syncOps() {
+  const op = $("ops-op").value;
+  for (const d of document.querySelectorAll("#dlg-ops [data-op]")) d.hidden = d.dataset.op !== op;
+  $("ops-desc").textContent = OPS_DESC[op] || "";
+  $("ops-error").textContent = "";
+}
+function openOps() {
+  const ds = curDs();
+  if (!ds) return;
+  $("ops-name").textContent = ds.name;
+  $("ops-preset").value = "";
+  $("ops-xexpr").value = "x";
+  $("ops-yexpr").value = "y";
+  $("ops-min").value = $("ops-max").value = "";
+  $("ops-dest").value = "new";
+  syncOps();
+  $("dlg-ops").showModal();
+}
+async function finishOps() {
+  const ds = curDs();
+  if (!ds) return false;
+  const opt = {
+    x_expr: $("ops-xexpr").value, y_expr: $("ops-yexpr").value, err: $("ops-meanerr").value,
+    mode: $("ops-norm").value, min: toNum($("ops-min").value), max: toNum($("ops-max").value),
+  };
+  const doc = curDoc();
+  const r = await rpc("transform", { dataset: ds, op: $("ops-op").value, opt });
+  if (doc !== curDoc() || curDs() !== ds) return true;
+  if (!r.ok) { $("ops-error").textContent = r.error; return false; }
+  const cols = { x: r.x, y: r.y, yerr: r.yerr, xerr: r.xerr };
+  const undoCount = state.undo.length, dest = $("ops-dest").value;
+  const { color, style, marker, filled, marker_size, line_width } = ds;   // 見た目は元のデータに合わせる
+  const item = { ...cols, name: `${ds.name} (${r.suffix})`, color, style, marker, filled, marker_size, line_width };
+  if (dest === "tab") {
+    // 軸の意味が変わる変換 (アレニウスプロットなど) は、別のグラフに分けたほうが見やすい
+    const fresh = clone(state.defaults.project);
+    fresh.settings = clone(state.project.settings);
+    fresh.settings.x_axis.auto = fresh.settings.y_axis.auto = true;
+    fresh.datasets.push(newDataset(fresh, item));
+    openDoc(fresh);
+    toast(r.note || "新しいグラフに作りました");
+    return true;
+  }
+  if (dest === "new") addDatasets([item], `データを加工 (${r.suffix})`);
+  else commit(`データを加工 (${r.suffix})`, (p) => { Object.assign(getDsIn(p, ds.id), cols, { source: null }); }, { refresh: "all" });
+  toast(state.undo.length === undoCount ? "データは変わりませんでした" : r.note || "加工しました (元に戻すで戻せます)");
+  return true;
+}
+
+function saveDatasetCsv() {
+  const ds = curDs();
+  if (!ds) return;
+  const rows = [["X", "Y", "Y誤差", "X誤差"]];
+  for (let r = 0; r < ds.x.length; r++) rows.push(COLS.map((k) => fmtNum(ds[k][r])));
+  saveBlob(csvBlob(rows), `${safeName(ds.name)}.csv`);
+}
+
+/* ---------- 別のグラフ (タブ) へコピー ---------- */
+function openCopyTo() {
+  const ds = curDs();
+  if (!ds) return;
+  stashDoc();
+  $("copyto-name").textContent = ds.name;
+  const list = $("copyto-list");
+  list.textContent = "";
+  const add = (label, action) => {
+    const b = el("button", "menu-item", label);
+    b.type = "button";
+    b.onclick = () => { $("dlg-copyto").close(); action(); };
+    list.append(b);
+  };
+  state.docs.forEach((d, i) => { if (i !== state.active) add(docLabel(d), () => copyDatasetTo(ds, i)); });
+  add("＋ 新しいグラフ", () => {
+    const fresh = clone(state.defaults.project);
+    fresh.settings = clone(state.project.settings);
+    fresh.datasets.push({ ...clone(ds), id: fresh.next_id++ });
+    openDoc(fresh);
+  });
+  $("dlg-copyto").showModal();
+}
+function copyDatasetTo(ds, i) {
+  // 開いていないグラフを直接書き換えるので、そのグラフの「元に戻す」にも記録する
+  const doc = state.docs[i];
+  doc.undo.push({ snap: JSON.stringify(doc.project), sel: doc.selectedId, desc: `「${ds.name}」をコピー` });
+  doc.redo = [];
+  doc.lastKey = null;
+  const copy = { ...clone(ds), id: doc.project.next_id++ };
+  doc.project.datasets.push(copy);
+  doc.selectedId = copy.id;
+  scheduleAutosave();
+  toast(`「${docLabel(doc)}」にコピーしました`);
+}
+
 /* ======================================================================
  * 画面の切り替え・ちょっとした表示
  * ==================================================================== */
@@ -1005,7 +1429,7 @@ function setTab(tab) {
   if (tab === "settings" || tab === "results") document.body.dataset.rtab = tab;
   for (const b of document.querySelectorAll(".tabbar button")) b.classList.toggle("active", b.dataset.tab === tab);
   for (const b of document.querySelectorAll(".rtabs button")) b.classList.toggle("active", b.dataset.rtab === document.body.dataset.rtab);
-  if (tab === "graph" && state.needsRender) scheduleRender(0);
+  if ((tab === "graph" || tab === "results") && state.needsRender) scheduleRender(0);
   window.scrollTo(0, 0);
 }
 
@@ -1035,11 +1459,21 @@ function wireUp() {
   fillSelect($("s-legloc"), d.legend_locs);
   fillSelect($("imp-style"), d.styles);
   fillSelect($("s-preset"), [...d.presets.map((p, i) => [p[0], String(i)]), ["カスタム", "custom"]]);
+  fillSelect($("p-template"), [["選ぶ…", ""], ...d.fit_templates]);
+  fillSelect($("p-band"), d.fit_bands);
+  fillSelect($("s-conf"), d.conf_levels);
+  fillSelect($("ops-op"), d.data_ops);
+  fillSelect($("ops-preset"), [["選ぶ…", ""], ...d.expr_presets.map((p, i) => [p[0], String(i)])]);
+  fillSelect($("ops-norm"), d.norm_modes);
+  fillSelect($("ops-meanerr"), d.mean_errors);
+  $("p-degree").max = d.max_poly_degree;
 
   $("btn-undo").onclick = () => undoRedo(state.undo, state.redo);
   $("btn-redo").onclick = () => undoRedo(state.redo, state.undo);
   document.addEventListener("keydown", (e) => {
-    if (!(e.ctrlKey || e.metaKey) || e.target.matches("input, textarea")) return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.key.toLowerCase() === "s") { e.preventDefault(); saveProject(); return; }   // Ctrl+S で保存
+    if (e.target.matches("input, textarea")) return;
     const k = e.key.toLowerCase();
     if (k === "z" && !e.shiftKey) { e.preventDefault(); undoRedo(state.undo, state.redo); }
     else if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); undoRedo(state.redo, state.undo); }
@@ -1057,12 +1491,15 @@ function wireUp() {
   };
 
   // メニュー
-  $("btn-menu").onclick = () => $("dlg-menu").showModal();
+  $("btn-menu").onclick = () => {
+    $("menu-reopen").disabled = !state.closed.length;
+    $("dlg-menu").showModal();
+  };
   $("dlg-menu").addEventListener("close", () => {
     const v = $("dlg-menu").returnValue;
     $("dlg-menu").returnValue = "";
     ({
-      new: newDoc, dup: duplicateDoc, rename: renameDoc,
+      new: newDoc, dup: duplicateDoc, rename: renameDoc, reopen: reopenDoc,
       open: () => $("file-open").click(), save: saveProject,
       import: () => $("file-import").click(), formula: openFormula, export: openExport,
       help: () => $("dlg-help").showModal(),
@@ -1145,7 +1582,41 @@ function wireUp() {
       if (inp) inp.focus();
     }, 0);
   });
+  tbody.addEventListener("paste", async (e) => {   // Excel などの複数セルを、選んだセルから貼り付ける
+    if (!e.target.matches("input")) return;
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    if (!/[\t\n]/.test(text.trim())) return;   // 値が 1 つだけなら、そのセルへのふつうの貼り付け
+    e.preventDefault();
+    const ds = curDs(), doc = curDoc();
+    const r0 = Number(e.target.closest("tr").dataset.r), c0 = Number(e.target.dataset.c);
+    const res = await rpc("parsePaste", { text });
+    if (doc !== curDoc() || curDs() !== ds) return;   // 待つ間に別のグラフ・データに移った
+    const rows = res.rows || [];
+    if (!rows.length) { toast("貼り付けられる数値がありませんでした"); return; }
+    commit(`${rows.length} 行を貼り付け`, (p) => {
+      const d = getDsIn(p, ds.id);
+      rows.forEach((row, i) => {
+        while (d.x.length <= r0 + i) for (const k of COLS) d[k].push(null);
+        row.slice(0, COLS.length - c0).forEach((v, j) => { d[COLS[c0 + j]][r0 + i] = v; });
+      });
+    }, { refresh: "all" });
+    toast(`${rows.length} 行を貼り付けました`);
+  });
   $("btn-more").onclick = () => { state.showAllRows = true; renderTable(); };
+  $("btn-ops").onclick = openOps;
+  $("btn-csv").onclick = saveDatasetCsv;
+  $("btn-copyto").onclick = openCopyTo;
+  $("ops-op").onchange = syncOps;
+  $("ops-preset").onchange = () => {
+    const preset = state.defaults.expr_presets[Number($("ops-preset").value)];
+    if ($("ops-preset").value === "" || !preset) return;
+    $("ops-xexpr").value = preset[1];
+    $("ops-yexpr").value = preset[2];
+  };
+  $("ops-ok").addEventListener("click", async (e) => {
+    e.preventDefault();
+    if (await finishOps()) $("dlg-ops").close();
+  });
   $("btn-addrow").onclick = () => {
     const ds = curDs(); if (!ds) return;
     commit("行を追加", (p) => { const d = getDsIn(p, ds.id); for (const k of COLS) d[k].push(null); });
@@ -1188,7 +1659,58 @@ function wireUp() {
   bindProp("p-formula", "fit.show_formula", "check", "近似式表示を切り替え");
   bindProp("p-weighted", "fit.weighted", "check", "重み付けを切り替え");
   bindProp("p-sig", "fit.sig_figs", "int", "有効数字を変更");
+  bindProp("p-degree", "fit.degree", "int", "多項式の次数を変更");
+  bindProp("p-xmin", "fit.x_min", "numnull", "近似に使う範囲を変更");
+  bindProp("p-xmax", "fit.x_max", "numnull", "近似に使う範囲を変更");
+  bindProp("p-band", "fit.band", "select", "区間の帯を変更");
+  bindProp("p-extend", "fit.extend", "check", "近似線の延長を切り替え");
+  $("p-degree").addEventListener("change", () => { const ds = curDs(); if (ds) $("p-degree").value = ds.fit.degree; });
+  $("p-template").onchange = () => applyTemplate($("p-template").value);
+  $("p-p0-auto").onclick = () => { const ds = curDs(); if (ds) applyTemplate(templateOf(ds.fit.equation)); };
+  $("p-p0").addEventListener("input", (e) => {
+    const ds = curDs(), name = e.target.dataset.p, v = toNum(e.target.value);
+    if (!ds || !name || v === null) return;
+    commit("初期値を変更", (p) => { const f = getDsIn(p, ds.id).fit; f.p0 = { ...(f.p0 || {}), [name]: v }; },
+      { mergeKey: `ds:${ds.id}:p0:${name}` });
+  });
   $("p-color").addEventListener("change", renderList);
+
+  // よく使う色
+  for (const c of ["#000000", ...d.colors]) {
+    const b = el("button");
+    b.type = "button";
+    b.style.background = c;
+    b.title = c;
+    b.setAttribute("aria-label", `色 ${c}`);
+    b.onclick = () => {
+      const ds = curDs();
+      if (!ds) return;
+      commit("色を変更", (p) => { getDsIn(p, ds.id).color = c; });
+      $("p-color").value = c;
+    };
+    $("p-swatches").append(b);
+  }
+
+  // ラベルに記号を入れる (最後に選んだラベル欄のカーソル位置へ)。[表示, 前に入れる文字, 後ろに入れる文字]
+  const symbols = [["上付き", "$^{", "}$"], ["下付き", "$_{", "}$"], ["斜体", "$", "$"], ["⁻¹", "$^{-1}$", ""],
+    ["°C", "°C", ""], ["µ", "µ", ""], ["Å", "Å", ""], ["λ", "λ", ""], ["θ", "θ", ""], ["Δ", "Δ", ""], ["·", "·", ""], ["×", "×", ""]];
+  let symTarget = $("s-xlabel");
+  for (const id of ["s-xlabel", "s-ylabel", "s-title", "s-residlabel"]) $(id).addEventListener("focus", () => { symTarget = $(id); });
+  for (const [label, before, after] of symbols) {
+    const b = el("button", "chip", label);
+    b.type = "button";
+    b.addEventListener("pointerdown", (e) => e.preventDefault());   // 入力欄の選択範囲を保つ
+    b.onclick = () => {
+      const t = symTarget.disabled ? $("s-xlabel") : symTarget;
+      const a = t.selectionStart ?? t.value.length, z = t.selectionEnd ?? a;
+      const inner = t.value.slice(a, z);
+      t.setRangeText(before + inner + after, a, z, "end");
+      if (after) t.setSelectionRange(a + before.length + inner.length, a + before.length + inner.length);   // カーソルを中へ
+      t.focus();
+      t.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    $("sym-bar").append(b);
+  }
 
   // グラフ設定
   $("s-preset").addEventListener("change", () => {
@@ -1217,6 +1739,9 @@ function wireUp() {
   bindSetting("s-legloc", "legend_loc", "select", "凡例の位置を変更");
   bindSetting("s-legframe", "legend_frame", "check", "凡例の枠を切り替え");
   bindSetting("s-grid", "grid", "check", "グリッド表示を切り替え");
+  bindSetting("s-conf", "conf_level", "selnum", "信頼水準を変更");
+  bindSetting("s-resid", "residuals", "check", "残差の表示を切り替え");
+  bindSetting("s-residlabel", "residual_label", "text", "残差の軸ラベルを変更");
   for (const fs of document.querySelectorAll("fieldset[data-axis]")) {
     const axis = fs.dataset.axis, nm = axis === "x_axis" ? "X軸" : "Y軸";
     const get = (k) => fs.querySelector(`[data-k="${k}"]`);
@@ -1232,6 +1757,12 @@ function wireUp() {
     });
     get("log").addEventListener("change", () => {
       commit(`${nm}の対数表示を切り替え`, (p) => { p.settings[axis].log = get("log").checked; });
+      renderSettings();
+    });
+    get("step").addEventListener("input", () => {   // 空欄・0 は自動
+      const v = toNum(get("step").value);
+      commit(`${nm}の目盛り間隔を変更`, (p) => { p.settings[axis].step = v !== null && v > 0 ? v : 0; },
+        { mergeKey: `set:${axis}.step` });
     });
     for (const k of ["min", "max"]) {
       get(k).addEventListener("input", () => {
@@ -1245,9 +1776,13 @@ function wireUp() {
 
   // 結果
   $("btn-copyres").onclick = async () => {
-    try { await navigator.clipboard.writeText(resultsTsv()); toast("近似結果をコピーしました (Excel に貼り付けできます)"); }
+    try { await navigator.clipboard.writeText(resultsTsv()); toast("結果をコピーしました (Excel に貼り付けできます)"); }
     catch (e) { toast("コピーできませんでした"); }
   };
+  $("btn-saveres").onclick = () => saveBlob(csvBlob(resultsRows()), `${safeName(docLabel(state))}_結果.csv`);
+  $("calc-ds").onchange = () => scheduleCalc(0);
+  for (const id of ["calc-x", "calc-y", "calc-yerr"]) $(id).addEventListener("input", () => scheduleCalc());
+  for (const id of ["tt-a", "tt-b", "tt-col", "tt-paired"]) $(id).onchange = runTtest;
 
   // 取り込み
   $("imp-sheet").onchange = reparseImport;
@@ -1275,6 +1810,12 @@ function wireUp() {
   // ダイアログの外側をタップしたら閉じる
   for (const dlg of document.querySelectorAll("dialog")) {
     dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close("cancel"); });
+    // 入力欄で Enter を押したら主ボタン (実行・生成など) を押す。何もしないと先頭の「キャンセル」が働いてしまう
+    dlg.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing || !e.target.matches("input:not([type=checkbox])")) return;
+      const ok = dlg.querySelector("button.primary");
+      if (ok) { e.preventDefault(); ok.click(); }
+    });
   }
 
   // ファイルのドラッグ&ドロップ (PC)
@@ -1289,6 +1830,18 @@ function wireUp() {
     } catch (err) { toast(String(err.message || err)); }
   });
 
+  // プレビュー上の座標を読む
+  const pv = $("preview-img");
+  let coordTimer = 0;
+  const hideCoord = () => { $("preview-coord").hidden = true; };
+  pv.addEventListener("pointermove", showCoord);
+  pv.addEventListener("pointerdown", (e) => { clearTimeout(coordTimer); showCoord(e); });
+  pv.addEventListener("pointerleave", (e) => {
+    // マウスは離れたらすぐ消す。タッチは指を離した後もしばらく読めるように残す
+    clearTimeout(coordTimer);
+    if (e.pointerType === "mouse") hideCoord(); else coordTimer = setTimeout(hideCoord, 4000);
+  });
+
   // プレビューの大きさが変わったら描き直す
   new ResizeObserver(() => scheduleRender(150)).observe($("preview"));
 }
@@ -1300,7 +1853,7 @@ async function start() {
   try {
     const r = await rpc("init");
     state.defaults = r.defaults;
-    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.3.1-202610131200`;
+    $("help-version").textContent = `グラフ生成アプリ Web 版 (計算部 v${r.version}) / ビルド 2.4.0-202611121200`;
   } catch (e) {
     showFatal(e.message);
     return;
@@ -1315,6 +1868,7 @@ async function start() {
       if (n.ok) state.docs.push(makeDoc(n.project, it.name || "graph.gproj"));
     }
     if (saved && Number.isInteger(saved.active)) active = saved.active;
+    if (saved && Array.isArray(saved.closed)) state.closed = saved.closed.filter((c) => c && c.project).slice(-5);
   } catch (e) { /* 復元できなければ新規 */ }
   if (!state.docs.length) state.docs.push(makeDoc(clone(state.defaults.project), "graph.gproj"));
   loadDoc(Math.max(0, Math.min(active, state.docs.length - 1)));
