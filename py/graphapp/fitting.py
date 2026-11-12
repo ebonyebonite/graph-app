@@ -587,7 +587,8 @@ def guess_p0(equation: str, x, y) -> dict[str, float] | None:
             guess = guesser(x[order], y[order])
     except Exception:  # noqa: BLE001  見積もれないときは既定値 (1) のまま
         return {}
-    return {k: float(v) for k, v in guess.items() if math.isfinite(float(v))}
+    # 目安なので有効数字 4 桁に丸める (入力欄で読みやすいように)
+    return {k: float(f"{float(v):.4g}") for k, v in guess.items() if math.isfinite(float(v))}
 
 
 def _f(v) -> float | None:
