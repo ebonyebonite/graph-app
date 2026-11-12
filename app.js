@@ -1030,13 +1030,7 @@ async function runTtest() {
   const seq = ++ttSeq;
   out.className = "calc-out";
   if (!a || !b || a === b) { out.textContent = a && a === b ? "別々のデータを選んでください。" : ""; return; }
-  let va = a[col], vb = b[col];
-  if (paired && va.length === vb.length) {   // 両方に値がある行だけを対にする
-    const ok = va.map((v, i) => Number.isFinite(v) && Number.isFinite(vb[i]));
-    va = va.filter((v, i) => ok[i]);
-    vb = vb.filter((v, i) => ok[i]);
-  }
-  const r = await rpc("ttest", { a: va, b: vb, paired, level: state.project.settings.conf_level });
+  const r = await rpc("ttest", { a: a[col], b: b[col], paired, level: state.project.settings.conf_level });
   if (seq !== ttSeq) return;
   if (!r.ok) { out.textContent = r.error; out.className = "calc-out err"; return; }
   const [d, se] = fmtPM(r.diff, r.se);

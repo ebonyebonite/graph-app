@@ -172,7 +172,7 @@ def transform(args_json: str) -> str:
     a = json.loads(args_json)
     try:
         return _ok(**dataops.apply(Dataset.from_dict(a["dataset"]), a.get("op", ""), a.get("opt")))
-    except (ExprError, ValueError, ArithmeticError) as e:
+    except Exception as e:  # noqa: BLE001
         return _err(str(e))
 
 
@@ -182,7 +182,7 @@ def ttest(args_json: str) -> str:
     try:
         return _ok(**_clean(stats.ttest(a.get("a") or [], a.get("b") or [], bool(a.get("paired")),
                                         a.get("level", 0.95))))
-    except ValueError as e:
+    except Exception as e:  # noqa: BLE001
         return _err(str(e))
 
 

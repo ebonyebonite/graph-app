@@ -134,10 +134,15 @@ def savgol_params(window_length: int, polyorder: int) -> tuple[int, int]:
     return wl, po
 
 
-def r_squared(y: np.ndarray, y_model: np.ndarray) -> float:
+def r_squared(y: np.ndarray, y_model: np.ndarray) -> float | None:
+    """決定係数 1 − Σ残差² / Σ(y − ȳ)²。どの近似でも平均からのばらつきを基準にする
+    (原点を通る直線でも同じ定義なので、合っていないと負になることがある)。"""
     ss_total = np.sum((y - np.mean(y)) ** 2)
     ss_residual = np.sum((y - y_model) ** 2)
-    return float(1 - ss_residual / ss_total) if ss_total > 0 else 1.0
+    if ss_total > 0:
+        return float(1 - ss_residual / ss_total)
+    # Y がすべて同じ値: ぴったり合っていれば 1、そうでなければ定義できない
+    return 1.0 if ss_residual <= 1e-24 * max(1.0, float(np.sum(y ** 2))) else None
 
 
 def poly_expr(degree: int) -> str:
@@ -166,19 +171,36 @@ def _sigma(spec, yerr, n) -> np.ndarray | None:
     return yerr
 
 
+def _shift_matrix(deg: int, alpha: float, beta: float) -> np.ndarray:
+    """t = αx + β の多項式の係数を x の多項式の係数に直す行列 (どちらも高次から)。"""
+    m = np.zeros((deg + 1, deg + 1))
+    for k in range(deg + 1):        # t^k = Σ_j C(k, j) α^j β^(k−j) x^j
+        for j in range(k + 1):
+            m[j, k] = math.comb(k, j) * alpha ** j * beta ** (k - j)
+    return m[::-1, ::-1]
+
+
 def _polyfit(x, y, deg: int, sigma):
-    """多項式の最小二乗 (係数は高次から)。共分散は求められなければ None。"""
+    """多項式の最小二乗。戻り値: (x の係数 [高次から], その共分散 or None, 中心化した表現)
+
+    桁落ちを防ぐため t = (x − x̄) / s で解き、係数と共分散を x の多項式へ換算する
+    (x が 2000〜2030 のように幅に比べて大きいと、x のべき乗のままでは共分散が不正確になる)。
+    近似値やその標準誤差は、中心化した表現 (t の係数 q, 共分散, x̄, s) のほうで計算する。
+    """
     if np.unique(x).size < deg + 1:
         raise ValueError(f"X の値が {deg + 1} 種類以上必要です")
+    x0, scale = float(np.mean(x)), float(np.std(x)) or 1.0
+    t = (x - x0) / scale
     w = None if sigma is None else 1.0 / sigma
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # 条件数の警告は出さない
         try:
-            p, cov = np.polyfit(x, y, deg, w=w, cov="unscaled" if w is not None else True)
+            q, cov = np.polyfit(t, y, deg, w=w, cov="unscaled" if w is not None else True)
         except ValueError:
             # 点数が少ないと共分散は求められない
-            p, cov = np.polyfit(x, y, deg, w=w), None
-    return p, cov
+            q, cov = np.polyfit(t, y, deg, w=w), None
+    shift = _shift_matrix(deg, 1.0 / scale, -x0 / scale)
+    return shift @ q, None if cov is None else shift @ cov @ shift.T, (q, cov, x0, scale)
 
 
 def _propfit(x, y, sigma):
@@ -290,12 +312,16 @@ def _fit_parametric(ds: Dataset, res: FitResult, x, y, yerr) -> None:
     def func(xx, *p):
         return expr(xx, *p)
 
-    if kind in ("linear", "poly"):
-        popt, pcov = _polyfit(x, y, degree, sigma)
-    elif kind == "log":
-        if np.any(x <= 0):
+    stable = None  # 多項式・対数: 桁落ちしにくい表現 (関数, 係数, 共分散)
+    if kind in ("linear", "poly", "log"):
+        if kind == "log" and np.any(x <= 0):
             raise ValueError("対数近似には、X がすべて正である必要があります")
-        popt, pcov = _polyfit(np.log(x), y, 1, sigma)
+        to_u = np.log if kind == "log" else (lambda v: v)
+        popt, pcov, (q, qcov, u0, scale) = _polyfit(to_u(x), y, degree, sigma)
+
+        def centered(xx, *c):
+            return np.polyval(c, (to_u(xx) - u0) / scale)
+        stable = (centered, np.asarray(q, dtype=float), qcov)
     elif kind == "proportional":
         popt, pcov = _propfit(x, y, sigma)
     else:
@@ -307,6 +333,11 @@ def _fit_parametric(ds: Dataset, res: FitResult, x, y, yerr) -> None:
             if np.any(x <= 0):
                 raise ValueError("累乗近似には、X がすべて正である必要があります")
             p0 = _loglin_guess(np.log(x), y, [1.0, 1.0])
+        start = func(x, *p0)
+        if not np.all(np.isfinite(start)):
+            bad = float(x[~np.isfinite(start)][0])
+            raise ValueError(f"x = {num_text(bad, 4)} などで式の値を計算できません (0 での割り算、負の数の対数など)。"
+                             "式・初期値・近似に使う X の範囲を見直してください")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", OptimizeWarning)
             popt, pcov = curve_fit(func, x, y, p0=np.array(p0, dtype=float), maxfev=10000,
@@ -314,8 +345,12 @@ def _fit_parametric(ds: Dataset, res: FitResult, x, y, yerr) -> None:
     popt = np.asarray(popt, dtype=float)
     if pcov is not None and not np.all(np.isfinite(pcov)):
         pcov = None
+    # 近似値・区間の計算に使う表現 (表示する係数 popt, pcov とは別に持つことがある)
+    eval_func, eval_p, eval_cov = stable or (func, popt, pcov)
+    if eval_cov is not None and (pcov is None or not np.all(np.isfinite(eval_cov))):
+        eval_cov = None
 
-    y_model = func(x, *popt)
+    y_model = eval_func(x, *eval_p)
     resid = y - y_model
     dof = n - len(names)
     res.dof = dof
@@ -325,7 +360,8 @@ def _fit_parametric(ds: Dataset, res: FitResult, x, y, yerr) -> None:
     if dof > 0:
         s2 = float(resid @ resid) / dof
         res.resid_sd = _f(math.sqrt(s2))
-        res.r2_adj = _f(1.0 - (1.0 - res.r2) * (n - 1) / dof)
+        if res.r2 is not None:
+            res.r2_adj = _f(1.0 - (1.0 - res.r2) * (n - 1) / dof)
         if sigma is not None:
             res.chi2_red = _f(float(np.sum((resid / sigma) ** 2)) / dof)
     crit = None
@@ -336,11 +372,11 @@ def _fit_parametric(ds: Dataset, res: FitResult, x, y, yerr) -> None:
         errs = [None] * len(names) if pcov is None else [_f(e) for e in np.sqrt(np.diag(pcov))]
     res.params = [(name, float(v), e) for name, v, e in zip(names, popt, errs)]
     res.ci = [None if e is None or crit is None else _f(crit * e) for e in errs]
-    res._func, res._popt, res._pcov, res._crit = func, popt, pcov, crit
+    res._func, res._popt, res._pcov, res._crit = eval_func, eval_p, eval_cov, crit
     res._s2 = s2 if sigma is None else None
     res.x_data, res.resid, res.resid_err = x, resid, yerr
     res.x_fit = np.linspace(min(x), max(x), 200)
-    res.y_fit = np.asarray(func(res.x_fit, *popt), dtype=float)
+    res.y_fit = res.evaluate(res.x_fit)
     band = getattr(spec, "band", "none")
     if band in ("confidence", "prediction"):
         if crit is None:
@@ -398,7 +434,8 @@ def solve_x(res: FitResult, y0: float, y_err: float | None = None, max_roots: in
     """近似式の値が y0 になる x を求める (検量線から未知試料の濃度を読むときなど)。
 
     x の不確かさは誤差の伝播で見積もる: u(x) = √(u(y0)² + u(近似値)²) / |傾き|
-    u(y0) は y_err の指定があればその値、なければ残差の標準偏差 (重みなしの近似のとき)。
+    u(y0) は y_err の指定があればその値。なければ、重みなしの近似では残差の標準偏差、
+    Y 誤差で重み付けした近似では Y 誤差の大きさ (二乗平均) を使う。
     直線は範囲を限らず解く。曲線はデータの範囲とその前後 (幅の 1 倍ずつ) を探す。
     """
     if not res.parametric or res.x_data.size == 0:
@@ -407,8 +444,8 @@ def solve_x(res: FitResult, y0: float, y_err: float | None = None, max_roots: in
     span = (hi - lo) or abs(lo) or 1.0
     roots: list[float] = []
     if res.kind in ("linear", "proportional"):
-        a = float(res._popt[0])
-        b = float(res._popt[1]) if res.kind == "linear" else 0.0
+        a = float(res.params[0][1])
+        b = float(res.params[1][1]) if res.kind == "linear" else 0.0
         if a == 0.0:
             raise ValueError("傾きが 0 のため求められません")
         roots.append((y0 - b) / a)
@@ -439,7 +476,14 @@ def solve_x(res: FitResult, y0: float, y_err: float | None = None, max_roots: in
         if len(roots) < max_roots and g[-1] == 0.0:
             roots.append(float(xs[-1]))
 
-    u_y = abs(float(y_err)) if y_err is not None else math.sqrt(res._s2) if res._s2 is not None else 0.0
+    if y_err is not None:
+        u_y = abs(float(y_err))
+    elif res._s2 is not None:
+        u_y = math.sqrt(res._s2)
+    elif res.weighted and res.resid_err is not None and res.resid_err.size:
+        u_y = float(np.sqrt(np.mean(res.resid_err ** 2)))
+    else:
+        u_y = 0.0
     out = []
     h = 1e-6 * span
     for r in roots:

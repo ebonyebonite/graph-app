@@ -52,8 +52,8 @@ def _columns(ds: Dataset):
 def _partial(f, x, y, which: int) -> np.ndarray:
     """f(x, y) の偏微分 (中心差分)。which=0 なら x、1 なら y について。"""
     v = (x, y)[which]
-    scale = float(np.max(np.abs(v))) if v.size else 1.0
-    h = 1e-6 * np.where(v != 0, np.abs(v), scale or 1.0)
+    nonzero = np.abs(v[v != 0])
+    h = 1e-6 * np.where(v != 0, np.abs(v), float(np.min(nonzero)) if nonzero.size else 1.0)  # 0 の点は、ほかの値の大きさを目安に
     hi, lo = [x, y], [x, y]
     hi[which], lo[which] = v + h, v - h
     with np.errstate(all="ignore"):
@@ -88,8 +88,8 @@ def apply(ds: Dataset, op: str, opt: dict | None = None) -> dict:
     nan = np.full(x.size, np.nan)
 
     if op == "expr":
-        fx = compile_expr(opt.get("x_expr") or "x", ("x", "y"))
-        fy = compile_expr(opt.get("y_expr") or "y", ("x", "y"))
+        fx = compile_expr(str(opt.get("x_expr") or "x"), ("x", "y"))
+        fy = compile_expr(str(opt.get("y_expr") or "y"), ("x", "y"))
         nx, ny = fx(x, y), fy(x, y)
         nxe, nye = _propagate(fx, x, y, xe, ye), _propagate(fy, x, y, xe, ye)
         bad = int(np.sum(~(np.isfinite(nx) & np.isfinite(ny))))
@@ -148,7 +148,9 @@ def apply(ds: Dataset, op: str, opt: dict | None = None) -> dict:
         for i in range(ux.size):
             g = y[inverse == i]
             my[i] = np.mean(g)
-            if g.size > 1 and mode in ("sd", "se"):
+            if g.size == 1:
+                sd[i] = ye[inverse == i][0]  # 1 点だけの X は、元の誤差をそのまま残す
+            elif mode in ("sd", "se"):
                 sd[i] = np.std(g, ddof=1) / (math.sqrt(g.size) if mode == "se" else 1.0)
         x, y, ye, xe = ux, my, sd, np.full(ux.size, np.nan)
     else:

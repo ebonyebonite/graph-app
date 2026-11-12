@@ -113,6 +113,33 @@ po, pc = optimize.curve_fit(lambda x, a, b: a * np.log(x) + b, x, yl)
 close(vals(res), po, 1e-7, "log")
 close(errs(res), np.sqrt(np.diag(pc)), 1e-5, "log errs")
 
+# X が幅に比べて大きい (年など) 高次の多項式でも、近似値の標準誤差が正しいこと (直交多項式での計算と比べる)
+from numpy.polynomial import legendre as L  # noqa: E402
+xo = np.linspace(2000, 2030, 40)
+yo = 0.02 * (xo - 2010) ** 2 + 3 + rng.normal(0, 0.5, xo.size)
+res = fitting.compute_fit(make(xo, yo, kind="poly", degree=5))
+A = L.legvander((xo - 2015) / 15, 5)
+coef = np.linalg.lstsq(A, yo, rcond=None)[0]
+C = np.sum((yo - A @ coef) ** 2) / (xo.size - 6) * np.linalg.inv(A.T @ A)
+xq = np.array([2010.0, 2025.0, 2040.0])
+Aq = L.legvander((xq - 2015) / 15, 5)
+close(res.evaluate(xq), Aq @ coef, 1e-8, "poly offset evaluate")
+close(res.se_mean(xq), np.sqrt(np.einsum("ij,jk,ik->i", Aq, C, Aq)), 1e-6, "poly offset se_mean")
+assert all(e is not None and e > 0 for e in errs(res))
+
+# Y が一定で合っていない近似は R² を出さない (1 と表示しない)
+res = fitting.compute_fit(make([1, 2, 3, 4], [5, 5, 5, 5], kind="proportional"))
+assert res.ok and res.r2 is None and res.r2_adj is None, (res.r2, res.r2_adj)
+res = fitting.compute_fit(make([1, 2, 3, 4], [5, 5, 5, 5], kind="linear"))
+assert res.ok and res.r2 == 1.0
+# 重み付きの逆算: y の不確かさを省くと Y 誤差の大きさを使う
+res = fitting.compute_fit(make(x, y, sig, kind="linear", weighted=True))
+a_w, se_fit = vals(res)[0], res.se_mean([fitting.solve_x(res, 11.0)[0]["x"]])[0]
+close(fitting.solve_x(res, 11.0)[0]["se"], math.sqrt(np.mean(sig ** 2) + se_fit ** 2) / abs(a_w), 1e-9, "weighted solve se")
+# 式の値を計算できない点があるときは、分かるメッセージにする
+res = fitting.compute_fit(make(np.arange(0, 6.0), [1, 5, 3, 2.3, 2, 1.8], kind="custom", equation="a / x + b"))
+assert not res.ok and "x = 0" in res.message, res.message
+
 # ---- 非線形 ----------------------------------------------------------------------
 ye = 5.0 * np.exp(-0.4 * x) + rng.normal(0, 0.02, x.size)
 res = fitting.compute_fit(make(x, ye, kind="exp"))
@@ -169,6 +196,9 @@ r, sp = G.ttest(a[:9], b, paired=True), S.ttest_rel(a[:9], b)
 close([r["t"], r["p"]], [sp.statistic, sp.pvalue], 1e-9, "paired")
 pr, sp = G.pearson(a[:9], b), S.pearsonr(a[:9], b)
 close(pr, [sp.statistic, sp.pvalue], 1e-9, "pearson")
+# 対応あり: 欠損のある行は対ごと除く (詰めてずらさない)
+r = G.ttest([1, None, 3, 4, 9], [1.5, 2.5, None, 4.5, 8.8], paired=True)
+close([r["diff"], r["n_a"]], [np.mean([1 - 1.5, 4 - 4.5, 9 - 8.8]), 3], 1e-12, "paired with gaps")
 d = G.describe([1, 2, None, 4, float("nan")])
 assert d["n"] == 3 and abs(d["sd"] - np.std([1, 2, 4], ddof=1)) < 1e-12
 
@@ -180,6 +210,8 @@ close(out["yerr"], [0.1] * 4, 1e-6, "ln y の誤差 = u(y)/y")
 out = dataops.apply(make([3, 1, 2, 1], [9, 1, 4, 3]), "mean", {"err": "sd"})
 assert out["x"] == [1, 2, 3] and out["y"] == [2, 4, 9] and out["yerr"][1] is None
 close(out["yerr"][0], np.std([1, 3], ddof=1), 1e-12, "mean sd")
+out = dataops.apply(make([1, 1, 2], [1, 3, 4], [0.1, 0.1, 0.3]), "mean", {"err": "sd"})
+assert out["yerr"][1] == 0.3, out  # 1 点だけの X は元の誤差を残す
 out = dataops.apply(make([0, 1, 2, 3], [0, 1, 4, 9]), "integ")
 close(out["y"], [0, 0.5, 3, 9.5], 1e-12, "integ")
 out = dataops.apply(make([0, 1, 2, 3], [0, 1, 4, 9]), "diff")
@@ -212,6 +244,11 @@ r = json.loads(webapi.predict(json.dumps({"dataset": dd[0], "x": 5, "y": 11, "le
 assert r["ok"] and r["predict"]["ci"] > 0 and r["solve"][0]["se"] > 0, r
 r = json.loads(webapi.transform(json.dumps({"dataset": dd[0], "op": "expr", "opt": {"y_expr": "log(y)"}})))
 assert r["ok"] or "無効" in r["error"], r
+r = json.loads(webapi.transform(json.dumps({"dataset": dd[0], "op": "expr", "opt": {"x_expr": 123}})))
+assert r["ok"] and r["x"][0] == 123.0, r
+for bad in ({"dataset": dd[0], "op": "expr", "opt": {"y_expr": "foo("}}, {"op": "sort"}, {"dataset": dd[0], "op": "?"}):
+    assert json.loads(webapi.transform(json.dumps(bad)))["ok"] is False
+assert json.loads(webapi.ttest(json.dumps({"a": "abc", "b": [1, 2]})))["ok"] is False
 r = json.loads(webapi.ttest(json.dumps({"a": list(a), "b": list(b)})))
 assert r["ok"] and 0 < r["p"] < 1
 r = json.loads(webapi.guess_p0(json.dumps({"dataset": dd[1], "equation": "A * exp(-k * x) + y0"})))

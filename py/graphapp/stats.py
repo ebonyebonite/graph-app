@@ -118,7 +118,7 @@ def valid_level(level) -> float:
         level = float(level)
     except (TypeError, ValueError):
         return 0.95
-    return level if 0.5 <= level < 1.0 else 0.95
+    return level if 0.5 <= level <= 0.9999 else 0.95
 
 
 # ---- 基本統計量 ----------------------------------------------------------------
@@ -172,17 +172,21 @@ def ttest(a, b, paired: bool = False, level: float = 0.95) -> dict:
     paired=False: Welch の t 検定 (等分散を仮定しない)
     paired=True : 対応のある t 検定 (同じ順番の値どうしの差を調べる)
     """
-    a, b = _finite(a), _finite(b)
     level = valid_level(level)
     if paired:
+        # 同じ行どうしを対にする。どちらかが欠けている行は使わない (欠損を詰めると対がずれる)
+        a, b = (np.array([np.nan if u is None else u for u in v], dtype=float) for v in (a, b))
         if a.size != b.size:
-            raise ValueError(f"対応のある検定には同じ点数が必要です ({a.size} 点と {b.size} 点)")
+            raise ValueError(f"対応のある検定には同じ行数が必要です ({a.size} 行と {b.size} 行)")
+        both = np.isfinite(a) & np.isfinite(b)
+        a, b = a[both], b[both]
         if a.size < 2:
-            raise ValueError("2 点以上のデータが必要です")
+            raise ValueError("両方に値のある行が 2 つ以上必要です")
         d = a - b
         diff, df = float(np.mean(d)), float(d.size - 1)
         se = float(np.std(d, ddof=1)) / math.sqrt(d.size)
     else:
+        a, b = _finite(a), _finite(b)
         if a.size < 2 or b.size < 2:
             raise ValueError("それぞれ 2 点以上のデータが必要です")
         va, vb = float(np.var(a, ddof=1)) / a.size, float(np.var(b, ddof=1)) / b.size
