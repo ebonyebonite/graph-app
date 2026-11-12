@@ -220,6 +220,8 @@ def _in_range(spec, x: np.ndarray) -> np.ndarray | None:
     lo, hi = _f(getattr(spec, "x_min", None)), _f(getattr(spec, "x_max", None))
     if lo is None and hi is None:
         return None
+    if lo is not None and hi is not None and lo > hi:
+        lo, hi = hi, lo  # 最小と最大が逆に入力されていても受け付ける
     mask = np.ones(x.size, dtype=bool)
     if lo is not None:
         mask &= x >= lo

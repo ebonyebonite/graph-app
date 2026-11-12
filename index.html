@@ -103,6 +103,7 @@
         <fieldset>
           <legend>表示</legend>
           <label class="row"><span>色</span><input type="color" id="p-color"></label>
+          <div id="p-swatches" class="swatches" role="group" aria-label="よく使う色"></div>
           <label class="row"><span>描き方</span><select id="p-style"></select></label>
           <label class="row"><span>マーカー</span><select id="p-marker"></select></label>
           <label class="row check"><input type="checkbox" id="p-filled"><span>マーカーを塗りつぶす</span></label>
@@ -132,7 +133,7 @@
           </div>
           <div id="p-param-box">
             <div class="row"><span>近似に使う X の範囲</span><span class="pair"><input type="number" id="p-xmin" step="any" inputmode="decimal" placeholder="最小" aria-label="近似に使う X の最小"> 〜 <input type="number" id="p-xmax" step="any" inputmode="decimal" placeholder="最大" aria-label="近似に使う X の最大"></span></div>
-            <label class="row"><span>区間の帯</span><select id="p-band"></select></label>
+            <label class="row"><span>区間を帯で表示</span><select id="p-band"></select></label>
             <label class="row check"><input type="checkbox" id="p-extend"><span>近似線をグラフの端まで延ばす</span></label>
           </div>
           <label class="col"><span>近似線の凡例名 (空欄なら自動)</span><input id="p-fitlabel"></label>
@@ -183,6 +184,7 @@
         <label class="col"><span>X軸ラベル</span><input id="s-xlabel"></label>
         <label class="col"><span>Y軸ラベル</span><input id="s-ylabel"></label>
         <p class="hint">量記号を斜体にするには $ で囲みます (例: <code>$t$ / s</code>)</p>
+        <div id="sym-bar" class="chips" role="group" aria-label="記号を入力 (カーソルの位置に入ります)"></div>
         <label class="row check"><input type="checkbox" id="s-showtitle"><span>図の下に図題を入れる</span></label>
         <label class="col"><span>図題</span><input id="s-title"></label>
       </fieldset>

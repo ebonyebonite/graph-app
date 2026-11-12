@@ -286,10 +286,13 @@ function closeDoc(i) {
 }
 
 async function reopenDoc() {
-  const c = state.closed.pop();
+  const c = state.closed[state.closed.length - 1];
   if (!c) return;
   const r = await rpc("normalize", { project: c.project });
   if (!r.ok) { toast(r.error); return; }
+  const i = state.closed.indexOf(c);
+  if (i < 0) return;   // 待つ間に復元済み (二度押し)
+  state.closed.splice(i, 1);
   openDoc(r.project, c.name);
 }
 
@@ -602,7 +605,9 @@ function templateOf(equation) {
 async function applyTemplate(expr) {
   const ds = curDs();
   if (!ds || !expr) return;
+  const doc = curDoc();
   const r = await rpc("guessP0", { dataset: ds, equation: expr });
+  if (doc !== curDoc() || curDs() !== ds) { renderProps(); return; }   // 待つ間に別のグラフ・データに移った
   const p0 = (r.ok && r.p0) || {};
   commit("近似式のテンプレートを設定", (p) => {
     const f = getDsIn(p, ds.id).fit;
@@ -703,6 +708,7 @@ function bindProp(id, path, kind, desc) {
     commit(desc, (p) => { setPath(getDsIn(p, ds.id), path, v); },
       { mergeKey: kind === "check" || kind === "select" ? null : `ds:${ds.id}:${path}` });
     if (path === "name") renderList();
+    if (path === "fit.equation") $("p-template").value = templateOf(v);
     updatePropsAvailability();
     if (path === "fit.equation" || path === "fit.kind") validateEq();
   });
@@ -934,7 +940,7 @@ function renderResults() {
   syncCalc();
   syncTtest();
 }
-const fitKindText = (r) => fitLabel(r.kind, r.kind === "poly" ? r.params.length - 1 : 0) || r.kind;
+const fitKindText = (r) => fitLabel(r.kind, r.kind === "poly" && r.ok ? r.params.length - 1 : 0) || r.kind;
 
 function resultsRows() {
   // コピー・CSV 保存用の表 (数値は丸めすぎない)
@@ -1339,6 +1345,10 @@ function openOps() {
   if (!ds) return;
   $("ops-name").textContent = ds.name;
   $("ops-preset").value = "";
+  $("ops-xexpr").value = "x";
+  $("ops-yexpr").value = "y";
+  $("ops-min").value = $("ops-max").value = "";
+  $("ops-new").checked = true;
   syncOps();
   $("dlg-ops").showModal();
 }
@@ -1349,9 +1359,12 @@ async function finishOps() {
     x_expr: $("ops-xexpr").value, y_expr: $("ops-yexpr").value, err: $("ops-meanerr").value,
     mode: $("ops-norm").value, min: toNum($("ops-min").value), max: toNum($("ops-max").value),
   };
+  const doc = curDoc();
   const r = await rpc("transform", { dataset: ds, op: $("ops-op").value, opt });
+  if (doc !== curDoc() || curDs() !== ds) return true;
   if (!r.ok) { $("ops-error").textContent = r.error; return false; }
   const cols = { x: r.x, y: r.y, yerr: r.yerr, xerr: r.xerr };
+  const undoCount = state.undo.length;
   if ($("ops-new").checked) {
     const { color, style, marker, filled, marker_size, line_width } = ds;   // 見た目は元のデータに合わせる
     addDatasets([{ ...cols, name: `${ds.name} (${r.suffix})`, color, style, marker, filled, marker_size, line_width }],
@@ -1359,7 +1372,7 @@ async function finishOps() {
   } else {
     commit(`データを加工 (${r.suffix})`, (p) => { Object.assign(getDsIn(p, ds.id), cols, { source: null }); }, { refresh: "all" });
   }
-  toast(r.note || "加工しました (元に戻すで戻せます)");
+  toast(state.undo.length === undoCount ? "データは変わりませんでした" : r.note || "加工しました (元に戻すで戻せます)");
   return true;
 }
 
@@ -1573,9 +1586,10 @@ function wireUp() {
     const text = (e.clipboardData || window.clipboardData).getData("text");
     if (!/[\t\n]/.test(text.trim())) return;   // 値が 1 つだけなら、そのセルへのふつうの貼り付け
     e.preventDefault();
-    const ds = curDs();
+    const ds = curDs(), doc = curDoc();
     const r0 = Number(e.target.closest("tr").dataset.r), c0 = Number(e.target.dataset.c);
     const res = await rpc("parsePaste", { text });
+    if (doc !== curDoc() || curDs() !== ds) return;   // 待つ間に別のグラフ・データに移った
     const rows = res.rows || [];
     if (!rows.length) { toast("貼り付けられる数値がありませんでした"); return; }
     commit(`${rows.length} 行を貼り付け`, (p) => {
@@ -1649,6 +1663,7 @@ function wireUp() {
   bindProp("p-xmax", "fit.x_max", "numnull", "近似に使う範囲を変更");
   bindProp("p-band", "fit.band", "select", "区間の帯を変更");
   bindProp("p-extend", "fit.extend", "check", "近似線の延長を切り替え");
+  $("p-degree").addEventListener("change", () => { const ds = curDs(); if (ds) $("p-degree").value = ds.fit.degree; });
   $("p-template").onchange = () => applyTemplate($("p-template").value);
   $("p-p0-auto").onclick = () => { const ds = curDs(); if (ds) applyTemplate(templateOf(ds.fit.equation)); };
   $("p-p0").addEventListener("input", (e) => {
@@ -1658,6 +1673,43 @@ function wireUp() {
       { mergeKey: `ds:${ds.id}:p0:${name}` });
   });
   $("p-color").addEventListener("change", renderList);
+
+  // よく使う色
+  for (const c of ["#000000", ...d.colors]) {
+    const b = el("button");
+    b.type = "button";
+    b.style.background = c;
+    b.title = c;
+    b.setAttribute("aria-label", `色 ${c}`);
+    b.onclick = () => {
+      const ds = curDs();
+      if (!ds) return;
+      commit("色を変更", (p) => { getDsIn(p, ds.id).color = c; });
+      $("p-color").value = c;
+    };
+    $("p-swatches").append(b);
+  }
+
+  // ラベルに記号を入れる (最後に選んだラベル欄のカーソル位置へ)。[表示, 前に入れる文字, 後ろに入れる文字]
+  const symbols = [["上付き", "$^{", "}$"], ["下付き", "$_{", "}$"], ["斜体", "$", "$"], ["⁻¹", "$^{-1}$", ""],
+    ["°C", "°C", ""], ["µ", "µ", ""], ["Å", "Å", ""], ["λ", "λ", ""], ["θ", "θ", ""], ["Δ", "Δ", ""], ["·", "·", ""], ["×", "×", ""]];
+  let symTarget = $("s-xlabel");
+  for (const id of ["s-xlabel", "s-ylabel", "s-title", "s-residlabel"]) $(id).addEventListener("focus", () => { symTarget = $(id); });
+  for (const [label, before, after] of symbols) {
+    const b = el("button", "chip", label);
+    b.type = "button";
+    b.addEventListener("pointerdown", (e) => e.preventDefault());   // 入力欄の選択範囲を保つ
+    b.onclick = () => {
+      const t = symTarget.disabled ? $("s-xlabel") : symTarget;
+      const a = t.selectionStart ?? t.value.length, z = t.selectionEnd ?? a;
+      const inner = t.value.slice(a, z);
+      t.setRangeText(before + inner + after, a, z, "end");
+      if (after) t.setSelectionRange(a + before.length + inner.length, a + before.length + inner.length);   // カーソルを中へ
+      t.focus();
+      t.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    $("sym-bar").append(b);
+  }
 
   // グラフ設定
   $("s-preset").addEventListener("change", () => {
@@ -1757,6 +1809,12 @@ function wireUp() {
   // ダイアログの外側をタップしたら閉じる
   for (const dlg of document.querySelectorAll("dialog")) {
     dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close("cancel"); });
+    // 入力欄で Enter を押したら主ボタン (実行・生成など) を押す。何もしないと先頭の「キャンセル」が働いてしまう
+    dlg.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing || !e.target.matches("input:not([type=checkbox])")) return;
+      const ok = dlg.querySelector("button.primary");
+      if (ok) { e.preventDefault(); ok.click(); }
+    });
   }
 
   // ファイルのドラッグ&ドロップ (PC)
@@ -1773,9 +1831,15 @@ function wireUp() {
 
   // プレビュー上の座標を読む
   const pv = $("preview-img");
+  let coordTimer = 0;
+  const hideCoord = () => { $("preview-coord").hidden = true; };
   pv.addEventListener("pointermove", showCoord);
-  pv.addEventListener("pointerdown", showCoord);
-  pv.addEventListener("pointerleave", () => { $("preview-coord").hidden = true; });
+  pv.addEventListener("pointerdown", (e) => { clearTimeout(coordTimer); showCoord(e); });
+  pv.addEventListener("pointerleave", (e) => {
+    // マウスは離れたらすぐ消す。タッチは指を離した後もしばらく読めるように残す
+    clearTimeout(coordTimer);
+    if (e.pointerType === "mouse") hideCoord(); else coordTimer = setTimeout(hideCoord, 4000);
+  });
 
   // プレビューの大きさが変わったら描き直す
   new ResizeObserver(() => scheduleRender(150)).observe($("preview"));
