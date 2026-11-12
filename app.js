@@ -1348,7 +1348,7 @@ function openOps() {
   $("ops-xexpr").value = "x";
   $("ops-yexpr").value = "y";
   $("ops-min").value = $("ops-max").value = "";
-  $("ops-new").checked = true;
+  $("ops-dest").value = "new";
   syncOps();
   $("dlg-ops").showModal();
 }
@@ -1364,14 +1364,21 @@ async function finishOps() {
   if (doc !== curDoc() || curDs() !== ds) return true;
   if (!r.ok) { $("ops-error").textContent = r.error; return false; }
   const cols = { x: r.x, y: r.y, yerr: r.yerr, xerr: r.xerr };
-  const undoCount = state.undo.length;
-  if ($("ops-new").checked) {
-    const { color, style, marker, filled, marker_size, line_width } = ds;   // 見た目は元のデータに合わせる
-    addDatasets([{ ...cols, name: `${ds.name} (${r.suffix})`, color, style, marker, filled, marker_size, line_width }],
-      `データを加工 (${r.suffix})`);
-  } else {
-    commit(`データを加工 (${r.suffix})`, (p) => { Object.assign(getDsIn(p, ds.id), cols, { source: null }); }, { refresh: "all" });
+  const undoCount = state.undo.length, dest = $("ops-dest").value;
+  const { color, style, marker, filled, marker_size, line_width } = ds;   // 見た目は元のデータに合わせる
+  const item = { ...cols, name: `${ds.name} (${r.suffix})`, color, style, marker, filled, marker_size, line_width };
+  if (dest === "tab") {
+    // 軸の意味が変わる変換 (アレニウスプロットなど) は、別のグラフに分けたほうが見やすい
+    const fresh = clone(state.defaults.project);
+    fresh.settings = clone(state.project.settings);
+    fresh.settings.x_axis.auto = fresh.settings.y_axis.auto = true;
+    fresh.datasets.push(newDataset(fresh, item));
+    openDoc(fresh);
+    toast(r.note || "新しいグラフに作りました");
+    return true;
   }
+  if (dest === "new") addDatasets([item], `データを加工 (${r.suffix})`);
+  else commit(`データを加工 (${r.suffix})`, (p) => { Object.assign(getDsIn(p, ds.id), cols, { source: null }); }, { refresh: "all" });
   toast(state.undo.length === undoCount ? "データは変わりませんでした" : r.note || "加工しました (元に戻すで戻せます)");
   return true;
 }

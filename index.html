@@ -388,7 +388,11 @@
     <div data-op="crop">
       <div class="row"><span>残す X の範囲</span><span class="pair"><input type="number" id="ops-min" step="any" inputmode="decimal" placeholder="最小" aria-label="最小"> 〜 <input type="number" id="ops-max" step="any" inputmode="decimal" placeholder="最大" aria-label="最大"></span></div>
     </div>
-    <label class="row check"><input type="checkbox" id="ops-new" checked><span>新しいデータセットとして追加 (元のデータを残す)</span></label>
+    <label class="row"><span>結果</span><select id="ops-dest">
+      <option value="new">新しいデータセットとして追加</option>
+      <option value="tab">新しいグラフ (タブ) に作る</option>
+      <option value="replace">元のデータを置き換える</option>
+    </select></label>
     <p id="ops-error" class="status err"></p>
     <div class="btn-row end">
       <button class="btn" value="cancel">キャンセル</button>
