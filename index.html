@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=2.3.1-202610131200">
+<link rel="stylesheet" href="style.css?v=2.4.0-202611121200">
 </head>
 <body data-tab="graph" data-rtab="settings">
 
@@ -83,6 +83,9 @@
           <button id="btn-paste" class="btn sm">貼り付け</button>
           <button id="btn-addrow" class="btn sm">行を追加</button>
           <button id="btn-textedit" class="btn sm">テキストで編集</button>
+          <button id="btn-ops" class="btn sm" title="式による変換・並べ替え・微分・積分など">加工</button>
+          <button id="btn-csv" class="btn sm" title="このデータセットを CSV ファイルに保存">CSV 保存</button>
+          <button id="btn-copyto" class="btn sm" title="このデータセットを別のグラフ (タブ) にコピー">別のグラフへ</button>
           <button id="btn-clear" class="btn sm">全消去</button>
         </div>
         <div class="table-wrap">
@@ -109,14 +112,28 @@
         <fieldset>
           <legend>近似</legend>
           <label class="row"><span>近似</span><select id="p-fit"></select></label>
+          <div id="p-poly-box">
+            <label class="row"><span>次数</span><input type="number" id="p-degree" min="1" max="9" step="1" inputmode="numeric"></label>
+          </div>
           <div id="p-custom-box">
-            <label class="col"><span>数式 (x, a, b, …)</span><input id="p-eq" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例: a * exp(-b * x) + c"></label>
+            <label class="row"><span>テンプレート</span><select id="p-template"></select></label>
+            <label class="col"><span>数式 (x と、a, b, … などのパラメータ)</span><input id="p-eq" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例: a * exp(-b * x) + c"></label>
             <p id="p-eq-status" class="status"></p>
+            <div id="p-p0-box" hidden>
+              <div class="row"><span>初期値</span><button type="button" id="p-p0-auto" class="btn sm">データから推定</button></div>
+              <div id="p-p0" class="p0-grid"></div>
+              <p class="hint">うまく合わないときは、初期値を実際の値に近づけてください。</p>
+            </div>
           </div>
           <div id="p-sg-box">
             <label class="row"><span>ウィンドウ長</span><input type="number" id="p-wl" min="3" step="2" inputmode="numeric"></label>
             <label class="row"><span>多項式次数</span><input type="number" id="p-po" min="0" step="1" inputmode="numeric"></label>
             <p id="p-sg-status" class="status"></p>
+          </div>
+          <div id="p-param-box">
+            <div class="row"><span>近似に使う X の範囲</span><span class="pair"><input type="number" id="p-xmin" step="any" inputmode="decimal" placeholder="最小" aria-label="近似に使う X の最小"> 〜 <input type="number" id="p-xmax" step="any" inputmode="decimal" placeholder="最大" aria-label="近似に使う X の最大"></span></div>
+            <label class="row"><span>区間の帯</span><select id="p-band"></select></label>
+            <label class="row check"><input type="checkbox" id="p-extend"><span>近似線をグラフの端まで延ばす</span></label>
           </div>
           <label class="col"><span>近似線の凡例名 (空欄なら自動)</span><input id="p-fitlabel"></label>
           <label class="row check"><input type="checkbox" id="p-r2"><span>R² を凡例に表示</span></label>
@@ -135,6 +152,7 @@
         <img id="preview-img" alt="グラフのプレビュー" hidden>
         <div id="preview-empty" class="preview-empty">データを追加するとここにグラフが表示されます</div>
         <div id="preview-busy" class="busy" hidden></div>
+        <div id="preview-coord" class="coord" hidden></div>
       </div>
     </div>
     <div class="btn-row center">
@@ -182,29 +200,71 @@
         <label class="row check"><input type="checkbox" id="s-legframe"><span>凡例を枠で囲む</span></label>
         <label class="row check"><input type="checkbox" id="s-grid"><span>グリッドを表示</span></label>
       </fieldset>
+      <fieldset>
+        <legend>統計</legend>
+        <label class="row"><span>信頼水準</span><select id="s-conf"></select></label>
+        <label class="row check"><input type="checkbox" id="s-resid"><span>残差 (測定値 − 近似値) を下に表示</span></label>
+        <label class="row"><span>残差の軸ラベル</span><input id="s-residlabel"></label>
+      </fieldset>
       <fieldset data-axis="x_axis">
         <legend>X軸</legend>
         <label class="row check"><input type="checkbox" data-k="auto"><span>範囲を自動で決める</span></label>
         <div class="row"><span>範囲</span><span class="pair"><input type="number" data-k="min" step="any" inputmode="decimal"> 〜 <input type="number" data-k="max" step="any" inputmode="decimal"></span></div>
+        <label class="row"><span>目盛りの間隔</span><input type="number" data-k="step" min="0" step="any" inputmode="decimal" placeholder="自動"></label>
         <label class="row check"><input type="checkbox" data-k="log"><span>対数軸</span></label>
       </fieldset>
       <fieldset data-axis="y_axis">
         <legend>Y軸</legend>
         <label class="row check"><input type="checkbox" data-k="auto"><span>範囲を自動で決める</span></label>
         <div class="row"><span>範囲</span><span class="pair"><input type="number" data-k="min" step="any" inputmode="decimal"> 〜 <input type="number" data-k="max" step="any" inputmode="decimal"></span></div>
+        <label class="row"><span>目盛りの間隔</span><input type="number" data-k="step" min="0" step="any" inputmode="decimal" placeholder="自動"></label>
         <label class="row check"><input type="checkbox" data-k="log"><span>対数軸</span></label>
       </fieldset>
     </div>
 
     <div id="rtab-results" class="rtab">
-      <div class="btn-row"><button id="btn-copyres" class="btn sm">表をコピー</button></div>
+      <div class="btn-row wrap">
+        <button id="btn-copyres" class="btn sm">結果をコピー</button>
+        <button id="btn-saveres" class="btn sm">CSV で保存</button>
+      </div>
+
+      <h3 class="sub">近似結果</h3>
+      <div id="fit-cards"></div>
+      <p id="res-empty" class="hint">近似を設定したデータセットがありません。</p>
+
+      <div id="calc-box" hidden>
+        <h3 class="sub">近似式で計算</h3>
+        <div class="card">
+          <label class="row"><span>近似</span><select id="calc-ds"></select></label>
+          <label class="col"><span>x から y を求める</span><input type="number" id="calc-x" step="any" inputmode="decimal" placeholder="x の値"></label>
+          <p id="calc-y-out" class="calc-out"></p>
+          <div class="col"><span>y から x を求める (検量線から濃度を読むときなど)</span>
+            <span class="pair wide"><input type="number" id="calc-y" step="any" inputmode="decimal" placeholder="y の値" aria-label="y の値"> ± <input type="number" id="calc-yerr" step="any" min="0" inputmode="decimal" placeholder="y の不確かさ (省略可)" aria-label="y の不確かさ"></span></div>
+          <p id="calc-x-out" class="calc-out"></p>
+          <p class="hint">y の不確かさを省略すると、近似の残差の大きさから見積もります。</p>
+        </div>
+      </div>
+
+      <h3 class="sub">基本統計量</h3>
       <div class="table-wrap">
-        <table id="res-table" class="res-table">
-          <thead><tr><th>データ</th><th>近似</th><th>パラメータ</th><th>値</th><th>標準誤差</th><th>R²</th></tr></thead>
+        <table id="stat-table" class="res-table">
+          <thead><tr><th>データ</th><th></th><th>点数</th><th>平均</th><th>標準偏差</th><th>標準誤差</th><th>中央値</th><th>最小</th><th>最大</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
-      <p id="res-empty" class="hint">近似を設定したデータセットがありません。</p>
+      <ul id="stat-extra" class="plain-list"></ul>
+      <p id="stat-empty" class="hint">表示中のデータがありません。</p>
+
+      <div id="tt-box" hidden>
+        <h3 class="sub">平均の比較 (t 検定)</h3>
+        <div class="card">
+          <div class="row"><span>比べるデータ</span><span class="pair"><select id="tt-a" aria-label="データ A"></select> と <select id="tt-b" aria-label="データ B"></select></span></div>
+          <label class="row"><span>比べる値</span><select id="tt-col"><option value="y">Y の値</option><option value="x">X の値</option></select></label>
+          <label class="row check"><input type="checkbox" id="tt-paired"><span>対応あり (同じ行どうしを比べる)</span></label>
+          <p id="tt-out" class="calc-out"></p>
+        </div>
+      </div>
+
       <h3 class="sub">メッセージ</h3>
       <ul id="msg-list" class="msg-list"></ul>
     </div>
@@ -225,6 +285,7 @@
     <button class="menu-item" value="new">新しいグラフ (タブを追加)</button>
     <button class="menu-item" value="dup">このグラフを複製</button>
     <button class="menu-item" value="rename">このグラフの名前を変更</button>
+    <button class="menu-item" value="reopen" id="menu-reopen">閉じたグラフを復元</button>
     <hr>
     <button class="menu-item" value="open">プロジェクトを開く (.gproj)</button>
     <button class="menu-item" value="save">プロジェクトを保存 (.gproj)</button>
@@ -304,6 +365,45 @@
   </form>
 </dialog>
 
+<!-- ===== データの加工 ===== -->
+<dialog id="dlg-ops" class="sheet">
+  <form method="dialog" id="ops-form">
+    <h2>データを加工 <small id="ops-name"></small></h2>
+    <label class="row"><span>加工</span><select id="ops-op"></select></label>
+    <p id="ops-desc" class="hint"></p>
+    <div data-op="expr">
+      <label class="row"><span>よく使う変換</span><select id="ops-preset"></select></label>
+      <label class="col"><span>新しい X =</span><input id="ops-xexpr" value="x" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label class="col"><span>新しい Y =</span><input id="ops-yexpr" value="y" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <p class="hint">x, y と関数 (log = 自然対数, log10, exp, sqrt など) が使えます。誤差棒も合わせて換算します (誤差の伝播)。</p>
+    </div>
+    <div data-op="mean">
+      <label class="row"><span>Y 誤差に入れる値</span><select id="ops-meanerr"></select></label>
+    </div>
+    <div data-op="norm">
+      <label class="row"><span>方法</span><select id="ops-norm"></select></label>
+    </div>
+    <div data-op="crop">
+      <div class="row"><span>残す X の範囲</span><span class="pair"><input type="number" id="ops-min" step="any" inputmode="decimal" placeholder="最小" aria-label="最小"> 〜 <input type="number" id="ops-max" step="any" inputmode="decimal" placeholder="最大" aria-label="最大"></span></div>
+    </div>
+    <label class="row check"><input type="checkbox" id="ops-new" checked><span>新しいデータセットとして追加 (元のデータを残す)</span></label>
+    <p id="ops-error" class="status err"></p>
+    <div class="btn-row end">
+      <button class="btn" value="cancel">キャンセル</button>
+      <button class="btn primary" id="ops-ok" value="ok">実行</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== 別のグラフへコピー ===== -->
+<dialog id="dlg-copyto" class="sheet">
+  <form method="dialog">
+    <h2>別のグラフへコピー <small id="copyto-name"></small></h2>
+    <div id="copyto-list"></div>
+    <button class="menu-item subtle" value="cancel">閉じる</button>
+  </form>
+</dialog>
+
 <!-- ===== 書き出し ===== -->
 <dialog id="dlg-export" class="sheet">
   <form method="dialog">
@@ -333,7 +433,7 @@
   <form method="dialog">
     <h2>使い方</h2>
     <div class="help">
-      <p>データをプロットし、線形近似・非線形近似 (カスタム式)・Savitzky-Golay 平滑化を行います。設定を変えるとグラフはすぐに更新されます。</p>
+      <p>データをプロットし、近似 (線形・多項式・指数・非線形など) と統計の計算を行います。設定を変えるとグラフはすぐに更新されます。</p>
       <h3>データの扱い</h3>
       <ul>
         <li>計算はすべてこの端末の中で行われ、入力したデータやファイルが外部に送られることはありません。</li>
@@ -350,20 +450,43 @@
       <h3>複数のグラフ</h3>
       <ul>
         <li>画面上部のタブで、いくつかのグラフを同時に開いて切り替えられます。<b>＋</b> で新しいグラフを追加します (グラフ設定は今のグラフから引き継ぎます)。</li>
-        <li>選択中のタブをもう一度押すと名前を変更できます。名前は保存・書き出しのファイル名になります。</li>
+        <li>選択中のタブをもう一度押すと名前を変更できます。名前は保存・書き出しのファイル名になります。タブはドラッグで並べ替えられます。</li>
         <li>データ・グラフ設定・「元に戻す」の履歴はグラフごとに別々です。保存 (.gproj) と書き出しは選択中のグラフが対象です。</li>
         <li>プロジェクトを開くと新しいタブで開きます (複数のファイルを選ぶとそれぞれ別のタブになります)。</li>
+        <li>閉じたグラフは、メニューの「閉じたグラフを復元」で戻せます (新しい順に 5 つまで)。</li>
+        <li>データ表の「別のグラフへ」で、データセットをほかのタブにコピーできます。</li>
+      </ul>
+      <h3>データの入力と加工</h3>
+      <ul>
+        <li>Excel などでコピーした範囲は、データ表のセルを選んでそのまま貼り付けられます (選んだセルが左上になります)。</li>
+        <li><b>加工</b> … 式による変換 (ln y、1/x など。誤差棒も換算します)、並べ替え、同じ X の点の平均、微分、積分、規格化、範囲の切り出し、X と Y の入れ替え。</li>
+        <li><b>CSV 保存</b> … データセットを CSV ファイルにします。</li>
       </ul>
       <h3>近似</h3>
       <ul>
+        <li>線形・比例・多項式・指数・累乗・対数・非線形 (カスタム)・Savitzky-Golay 平滑化が選べます。指数と累乗は対数に直さず、元のデータに対する最小二乗で求めます (Excel の近似曲線とは少し違うことがあります)。</li>
         <li>非線形 (カスタム) は <code>a * exp(-b * x) + c</code> のように書きます。x 以外の名前 (a, b, c …) がフィットパラメータになります。</li>
+        <li>テンプレート (指数減衰、ガウス関数、ミカエリス・メンテンなど) を選ぶと、式と初期値が入ります。うまく合わないときは初期値を実際の値に近づけてください。</li>
+        <li><b>近似に使う X の範囲</b> … 直線になる部分だけを近似するときなどに指定します。</li>
+        <li><b>区間の帯</b> … 近似線の信頼区間、または新しい測定値が入る予測区間を、線のまわりに薄い帯で描きます。</li>
         <li>Y誤差を入れたデータは「Y 誤差で重み付けする」で重み付きフィットができます。</li>
+      </ul>
+      <h3>統計</h3>
+      <ul>
+        <li><b>結果</b> タブに、パラメータの標準誤差と信頼区間、R²、補正 R²、残差の標準偏差が出ます。値と誤差は、誤差の有効数字 2 桁の位にそろえて表示します。</li>
+        <li><b>近似式で計算</b> … x から y を求めるほか、y から x を逆算できます (検量線から未知試料の濃度と不確かさを求めるときなど)。</li>
+        <li><b>基本統計量</b> … 点数・平均・標準偏差 (n−1)・標準誤差・中央値・最小・最大、相関係数、面積 (台形則)。</li>
+        <li><b>平均の比較</b> … 2 つのデータセットの平均の差を t 検定 (Welch / 対応あり) で調べます。</li>
+        <li>グラフ設定の「統計」で、信頼水準 (既定 95 %) と、残差 (測定値 − 近似値) のグラフの表示を選べます。</li>
+        <li>信頼区間は、重みなしの近似では t 分布から求めます。Y 誤差で重み付けした近似では、誤差を既知の標準偏差とみなして正規分布から求め、当てはまりは χ²/自由度 (1 に近いほど誤差と合っている) で確かめます。</li>
       </ul>
       <h3>保存と書き出し</h3>
       <ul>
         <li><b>プロジェクトを保存</b> … <code>.gproj</code> ファイルとして保存します。PC 版 (Windows) と同じ形式なので、PC と スマホ の間でそのまま開けます。</li>
         <li><b>画像を書き出し</b> … PNG / PDF / SVG / EPS / TIFF。図は「グラフ設定」の幅 × 高さ (cm) どおりの大きさになります。</li>
         <li>作業中のグラフ (開いているタブすべて) はこのブラウザに自動で保存され、次に開いたときに復元されます。</li>
+        <li>プレビューにポインタを置く (スマホではタップする) と、その位置の座標が左下に出ます。</li>
+        <li>PC では Ctrl+S でプロジェクトを保存、Ctrl+Z / Ctrl+Y で元に戻す・やり直しができます。</li>
       </ul>
       <h3>ホーム画面に追加</h3>
       <p>iPhone は Safari の共有ボタン →「ホーム画面に追加」、Android は Chrome のメニュー →「ホーム画面に追加」で、アプリのように起動できます。一度読み込めばオフラインでも使えます (Excel の取り込みは初回のみ通信が必要)。</p>
@@ -377,6 +500,6 @@
 <input type="file" id="file-import" accept=".csv,.tsv,.txt,.dat,.xlsx,.xlsm,.gproj,text/csv,text/plain" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<script src="app.js?v=2.3.1-202610131200"></script>
+<script src="app.js?v=2.4.0-202611121200"></script>
 </body>
 </html>
