@@ -11,10 +11,11 @@ from dataclasses import asdict
 
 import numpy as np
 
-from graphapp import APP_VERSION, io_utils
-from graphapp.fitting import savgol_params
-from graphapp.model import (AUTO_MARKERS, DEFAULT_COLORS, FIGURE_PRESETS, FIT_KINDS, FONT_STYLES,
-                            LEGEND_LOCS, MARKERS, STYLES, Dataset, GraphSettings, Project)
+from graphapp import APP_VERSION, dataops, fitting, io_utils, stats
+from graphapp.fitting import compute_fit, savgol_params
+from graphapp.model import (AUTO_MARKERS, CONF_LEVELS, DEFAULT_COLORS, FIGURE_PRESETS, FIT_BANDS, FIT_KINDS,
+                            FIT_TEMPLATES, FONT_STYLES, LEGEND_LOCS, MARKERS, STYLES, Dataset, GraphSettings,
+                            Project)
 from graphapp.plot_core import build_figure, render_bytes, setup_fonts
 from graphapp.safe_expr import ExprError, compile_expr
 from graphapp.texfmt import equation_tex, num_tex
@@ -32,6 +33,21 @@ def _err(msg: str) -> str:
 
 def _f(v):
     return None if v is None or not np.isfinite(v) else float(v)
+
+
+def _clean(obj):
+    """JSON にできる形にそろえる (numpy の数値 → float、無限大・NaN → None)。"""
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean(v) for v in obj]
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        return _f(obj)
+    return obj
 
 
 def init() -> str:
@@ -58,6 +74,14 @@ def defaults_dict() -> dict:
         "font_styles": FONT_STYLES,
         "presets": FIGURE_PRESETS,
         "legend_locs": LEGEND_LOCS,
+        "fit_templates": FIT_TEMPLATES,
+        "fit_bands": FIT_BANDS,
+        "conf_levels": CONF_LEVELS,
+        "max_poly_degree": fitting.MAX_POLY_DEGREE,
+        "data_ops": [(label, key) for label, key, _ in dataops.OPS],
+        "expr_presets": dataops.EXPR_PRESETS,
+        "norm_modes": dataops.NORM_MODES,
+        "mean_errors": dataops.MEAN_ERRORS,
     }
 
 
@@ -82,18 +106,84 @@ def render(project_json: str, fmt: str = "png", dpi: float = 100, tight: bool = 
         ax = fig.axes[0]
         res = []
         for r in results:
+            ci = list(r.ci) + [None] * (len(r.params) - len(r.ci))
             res.append({
                 "dataset_id": r.dataset_id, "name": r.dataset_name, "kind": r.kind, "ok": r.ok,
                 "equation": r.equation, "message": r.message, "r2": _f(r.r2), "weighted": r.weighted,
-                "params": [{"name": n, "value": _f(v), "err": _f(e)} for n, v, e in r.params],
+                "params": [{"name": n, "value": _f(v), "err": _f(e), "ci": _f(c)}
+                           for (n, v, e), c in zip(r.params, ci)],
+                "parametric": r.parametric, "n": r.n, "dof": r.dof, "level": r.level,
+                "r2_adj": _f(r.r2_adj), "resid_sd": _f(r.resid_sd), "chi2_red": _f(r.chi2_red),
             })
         msgs = [f"[{r.dataset_name}] {r.message}" for r in results if r.message]
         msgs += [f"[{ds.name}] プロットできる点がありません。" for ds in visible if ds.n_points == 0]
+        # プレビュー上の座標を読むための情報 (図全体を 0〜1 としたときのグラフ領域と、その軸の範囲)
+        axes = {"box": [float(v) for v in ax.get_position().extents],
+                "xlog": ax.get_xscale() == "log", "ylog": ax.get_yscale() == "log"}
         return _ok(empty=False, image=base64.b64encode(data).decode("ascii"), fmt=fmt,
                    xlim=list(map(float, ax.get_xlim())), ylim=list(map(float, ax.get_ylim())),
-                   results=res, messages=msgs)
+                   results=res, messages=msgs, axes=axes, stats=[_describe(ds) for ds in visible])
     except Exception as e:  # noqa: BLE001
         return _err(f"描画できませんでした: {e}")
+
+
+def _describe(ds: Dataset) -> dict:
+    """データセットの基本統計量 (有効な点のみ)。"""
+    x, y, _, _ = ds.valid_arrays()
+    r, p = stats.pearson(x, y)
+    return _clean({"dataset_id": ds.id, "name": ds.name, "x": stats.describe(x), "y": stats.describe(y),
+                   "r": r, "r_p": p, "area": stats.trapezoid(x, y)})
+
+
+def predict(args_json: str) -> str:
+    """近似式を使った計算: x → y (予測) と y → x (逆算。検量線から濃度を求めるときなど)。"""
+    a = json.loads(args_json)
+    try:
+        ds = Dataset.from_dict(a["dataset"])
+        res = compute_fit(ds, a.get("level", 0.95))
+        if res is None or not res.parametric:
+            return _err((res.message if res and res.message else "") or "式による近似が設定されていません。")
+        out = {"level": res.level, "weighted": res.weighted}
+        if a.get("x") is not None:
+            out["predict"] = fitting.predict(res, float(a["x"]))
+        if a.get("y") is not None:
+            out["solve"] = fitting.solve_x(res, float(a["y"]), a.get("y_err"))
+        return _ok(**_clean(out))
+    except Exception as e:  # noqa: BLE001
+        return _err(f"計算できませんでした: {e}")
+
+
+def guess_p0(args_json: str) -> str:
+    """非線形 (カスタム) の初期値をデータから見積もる。テンプレートの式でなければ p0 は null。"""
+    a = json.loads(args_json)
+    try:
+        ds = Dataset.from_dict(a["dataset"])
+        x, y, _, _ = ds.valid_arrays()
+        mask = fitting._in_range(ds.fit, x)
+        if mask is not None:
+            x, y = x[mask], y[mask]
+        return _ok(p0=_clean(fitting.guess_p0(a.get("equation", ds.fit.equation), x, y)))
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+
+
+def transform(args_json: str) -> str:
+    """データの加工 (式による変換・並べ替え・微分・積分など)。新しい列を返す。"""
+    a = json.loads(args_json)
+    try:
+        return _ok(**dataops.apply(Dataset.from_dict(a["dataset"]), a.get("op", ""), a.get("opt")))
+    except (ExprError, ValueError, ArithmeticError) as e:
+        return _err(str(e))
+
+
+def ttest(args_json: str) -> str:
+    """2 つのデータの平均の差の検定 (Welch / 対応あり)。"""
+    a = json.loads(args_json)
+    try:
+        return _ok(**_clean(stats.ttest(a.get("a") or [], a.get("b") or [], bool(a.get("paired")),
+                                        a.get("level", 0.95))))
+    except ValueError as e:
+        return _err(str(e))
 
 
 def validate_fit(expr: str) -> str:

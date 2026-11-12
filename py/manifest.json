@@ -3,7 +3,9 @@
  "files": [
   "graphapp/__init__.py",
   "graphapp/model.py",
+  "graphapp/stats.py",
   "graphapp/fitting.py",
+  "graphapp/dataops.py",
   "graphapp/numerics.py",
   "graphapp/safe_expr.py",
   "graphapp/texfmt.py",
